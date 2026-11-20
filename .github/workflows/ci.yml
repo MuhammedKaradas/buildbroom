@@ -25,7 +25,7 @@ jobs:
       - name: PSScriptAnalyzer
         run: |
           Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck
-          $issues = Invoke-ScriptAnalyzer -Path windows, tests -Recurse -Severity Error
+          $issues = @("windows", "tests") | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Recurse -Severity Error }
           $issues | Format-Table -AutoSize
           if ($issues) { exit 1 }
 
