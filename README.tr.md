@@ -125,6 +125,11 @@ Bir-iki haftada bir çalıştır, kuru çalıştırma raporunu oku, sonra `-Appl
 Zamanlamak istersen Görev Zamanlayıcı'yı kullan. Önce `-Mode caches -Apply`'ı zamanla. Kalıntı
 temizliğini ise ancak birkaç kuru çalıştırma doğru klasörleri seçtiğini gösterdikten sonra aç.
 
+## Katkı
+
+Bkz. [CONTRIBUTING.md](CONTRIBUTING.md). Lütfen [davranış kurallarına](CODE_OF_CONDUCT.md) uy, güvenlik
+sorunlarını da [SECURITY.md](SECURITY.md)'de anlatıldığı gibi gizli olarak bildir.
+
 ## Lisans
 
 [MIT](LICENSE)
