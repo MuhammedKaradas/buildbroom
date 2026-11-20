@@ -1,0 +1,67 @@
+name: Release
+
+# On a v* tag: check the version, run the safety test, zip the Windows scripts + SHA256, create a draft release.
+# On PRs that change the release setup, the zip is only built and uploaded as an artifact.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $inScript = [regex]::Match((Get-Content windows/buildbroom.ps1 -Raw), "\`$Version = '([^']+)'").Groups[1].Value
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $v = $env:GITHUB_REF_NAME.TrimStart('v')
+            if ($v -ne $inScript) { throw "Tag v$v does not match `$Version = '$inScript' in windows/buildbroom.ps1" }
+          } else { $v = "$inScript-pr" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "file=buildbroom-$v-windows" >> $env:GITHUB_OUTPUT
+
+      - name: Safety test
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/safety.ps1
+
+      - name: Zip and SHA256
+        shell: pwsh
+        run: |
+          $name = '${{ steps.version.outputs.file }}'
+          $stage = "dist/$name"
+          New-Item -ItemType Directory -Force "$stage/windows" | Out-Null
+          Copy-Item buildbroom.cmd, README.md, README.tr.md, LICENSE, config.example.json $stage
+          Copy-Item windows/buildbroom.ps1 "$stage/windows"
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/$name.zip"
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Out-File "dist/$name.zip.sha256" -Encoding ascii
+          "{0:N0} KB, SHA256 {1}" -f ((Get-Item "dist/$name.zip").Length / 1KB), $hash
+
+      - name: Artifact (PR)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.version.outputs.file }}
+          path: dist/${{ steps.version.outputs.file }}.zip
+          retention-days: 7
+
+      - name: Draft release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = '${{ steps.version.outputs.file }}'
+          $prerelease = if ('${{ steps.version.outputs.version }}'.Contains('-')) { '--prerelease' } else { '' }
+          gh release create $env:GITHUB_REF_NAME "dist/$name.zip" "dist/$name.zip.sha256" `
+            --draft --generate-notes --title "buildbroom $env:GITHUB_REF_NAME" $prerelease
