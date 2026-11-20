@@ -1,4 +1,4 @@
-# devsweep
+# buildbroom
 
 Safely reclaim disk space eaten by developer caches and build artifacts.
 
@@ -7,23 +7,23 @@ fast: every worktree gets its own `node_modules`, `bin/obj`, `target`, `.next`, 
 Add global caches (npm, Gradle, NuGet, Go, Docker build cache, Temp) on top of that and your system
 drive fills up again every few weeks. Each time you end up looking up which folders are safe to delete.
 
-devsweep keeps that knowledge in one script, and **does nothing destructive unless you ask it to**.
+buildbroom keeps that knowledge in one script, and **does nothing destructive unless you ask it to**.
 
 > Status: **Windows (PowerShell 5.1+)** works today. macOS and Linux are planned. See [ROADMAP](docs/ROADMAP.md).
 
 ## Quick start (Windows)
 
 ```powershell
-git clone https://github.com/<you>/devsweep.git
-cd devsweep
+git clone https://github.com/MuhammedKaradas/buildbroom.git
+cd buildbroom
 
-.\devsweep.cmd                              # dry run: report caches + artifacts under the current folder
-.\devsweep.cmd -Mode artifacts -Roots D:\code,E:\work
-.\devsweep.cmd -Mode artifacts -Roots D:\code -OlderThanDays 14 -Apply
-.\devsweep.cmd -Mode caches -Apply
+.\buildbroom.cmd                              # dry run: report caches + artifacts under the current folder
+.\buildbroom.cmd -Mode artifacts -Roots D:\code,E:\work
+.\buildbroom.cmd -Mode artifacts -Roots D:\code -OlderThanDays 14 -Apply
+.\buildbroom.cmd -Mode caches -Apply
 ```
 
-`devsweep.cmd` just runs `windows\devsweep.ps1` with `-ExecutionPolicy Bypass`, so you don't have to
+`buildbroom.cmd` just runs `windows\buildbroom.ps1` with `-ExecutionPolicy Bypass`, so you don't have to
 change your execution policy. You can also call the `.ps1` directly.
 
 ## What it cleans
@@ -63,7 +63,7 @@ Downloads. They show up in the report so you know where your space went.
 
 ## Safety model
 
-1. **Dry run by default.** Without `-Apply`, devsweep only prints a report.
+1. **Dry run by default.** Without `-Apply`, buildbroom only prints a report.
 2. **Marker files.** A folder named `build` is only a candidate if a real project file sits next to it.
 3. **Git check.** A candidate is deleted only if `git check-ignore` says it is ignored, so a
    committed `dist/` or `bin/` is never touched. Folders outside a git repo are kept unless you
@@ -93,7 +93,7 @@ Downloads. They show up in the report so you know where your space went.
 ## Config file
 
 So you don't have to type your roots every time, put them in
-`%USERPROFILE%\.config\devsweep\config.json` (see [`config.example.json`](config.example.json)):
+`%USERPROFILE%\.config\buildbroom\config.json` (see [`config.example.json`](config.example.json)):
 
 ```json
 {

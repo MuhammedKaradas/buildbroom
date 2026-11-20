@@ -6,7 +6,7 @@
 - Junction-safe deletion
 
 ## v0.2: macOS + Linux
-- `unix/devsweep.sh` (bash) with the same flags and the same safety rules
+- `unix/buildbroom.sh` (bash) with the same flags and the same safety rules
 - Cache locations: `~/.npm`, `~/.cache/*`, `~/Library/Caches/*`, `~/.gradle`, `~/go/pkg/mod`
   (with `-Deep` only), Xcode `DerivedData`, iOS simulators (report only), Homebrew `brew cleanup`
 - Never follow symlinks (`find -P`, `rm -rf` on the link itself only)
@@ -18,7 +18,7 @@
 
 ## v0.4: single cross-platform command
 Options, to be decided:
-- **npm package** (`npx devsweep`): easiest for JS developers, Node is already installed
+- **npm package** (`npx buildbroom`): easiest for JS developers, Node is already installed
 - **Go or Rust binary**: no runtime needed, one file per OS, could ship via winget / scoop / Homebrew
 - Keep the shell scripts as zero-dependency fallbacks
 

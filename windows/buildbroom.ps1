@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  devsweep - safely reclaim disk space eaten by developer caches and build artifacts.
+  buildbroom - safely reclaim disk space eaten by developer caches and build artifacts.
 
 .DESCRIPTION
   Two kinds of cleanup:
@@ -20,15 +20,15 @@
         - it has not been modified for -OlderThanDays days (active worktrees are kept)
     * Deletion uses `rmdir /s /q`, which removes junctions/symlinks WITHOUT following them.
       (PowerShell 5.1 Remove-Item can follow junctions - e.g. pnpm/monorepo workspace links -
-      and delete the real source. devsweep never uses it on artifact folders.)
+      and delete the real source. buildbroom never uses it on artifact folders.)
     * Paths are never followed through reparse points while scanning or measuring.
     * Big items like Docker/WSL virtual disks and Android SDKs are reported, never deleted.
 
 .EXAMPLE
-  .\devsweep.ps1                                   # report caches + artifacts (dry run)
-  .\devsweep.ps1 -Mode artifacts -Roots F:\code    # report build artifacts under F:\code
-  .\devsweep.ps1 -Mode artifacts -Roots F:\code -OlderThanDays 14 -Apply
-  .\devsweep.ps1 -Mode caches -Apply
+  .\buildbroom.ps1                                   # report caches + artifacts (dry run)
+  .\buildbroom.ps1 -Mode artifacts -Roots F:\code    # report build artifacts under F:\code
+  .\buildbroom.ps1 -Mode artifacts -Roots F:\code -OlderThanDays 14 -Apply
+  .\buildbroom.ps1 -Mode caches -Apply
 #>
 [CmdletBinding()]
 param(
@@ -51,7 +51,7 @@ param(
 
     [switch]$Apply,
 
-    [string]$Config = (Join-Path $env:USERPROFILE '.config\devsweep\config.json')
+    [string]$Config = (Join-Path $env:USERPROFILE '.config\buildbroom\config.json')
 )
 
 $ErrorActionPreference = 'Continue'
@@ -290,7 +290,7 @@ function Invoke-Artifacts {
 # ---------------------------------------------------------------- main
 $free0 = Get-FreeBytes
 $modeText = if ($Apply) { 'APPLY' } else { 'DRY RUN (nothing deleted, add -Apply)' }
-Write-Host "devsweep $Version - $modeText" -ForegroundColor Cyan
+Write-Host "buildbroom $Version - $modeText" -ForegroundColor Cyan
 Write-Host ("Free on {0}: {1}" -f $env:SystemDrive, (Format-Size $free0)) -ForegroundColor Cyan
 
 if ($Mode -in 'all', 'caches')    { Invoke-Caches }
