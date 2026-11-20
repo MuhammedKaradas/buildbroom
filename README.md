@@ -1,5 +1,7 @@
 # buildbroom
 
+**English** · [Türkçe](README.tr.md)
+
 Safely reclaim disk space eaten by developer caches and build artifacts.
 
 If you work on many repos, or on one repo with several **git worktrees**, build output piles up
@@ -17,7 +19,7 @@ buildbroom keeps that knowledge in one script, and **does nothing destructive un
 git clone https://github.com/MuhammedKaradas/buildbroom.git
 cd buildbroom
 
-.\buildbroom.cmd                              # dry run: report caches + artifacts under the current folder
+.\buildbroom.cmd                              # dry run: report caches (+ artifacts under your configured roots)
 .\buildbroom.cmd -Mode artifacts -Roots D:\code,E:\work
 .\buildbroom.cmd -Mode artifacts -Roots D:\code -OlderThanDays 14 -Apply
 .\buildbroom.cmd -Mode caches -Apply
@@ -38,7 +40,7 @@ change your execution policy. You can also call the `.ps1` directly.
 | Go build cache | `go clean -cache` |
 | Gradle `caches/` + `daemon/` logs | stops Gradle daemons first; skipped while Android Studio / IntelliJ is open |
 | NuGet http + plugins cache | `dotnet nuget locals ... --clear`; skipped while Visual Studio / Rider is open |
-| Temp | only entries older than `-TempDays` (default 3) |
+| Temp | only top-level entries with nothing inside written for `-TempDays` days (default 3) |
 | Crash dumps | `%LOCALAPPDATA%\CrashDumps` |
 | Docker build cache | `docker builder prune -f`. Images, containers and volumes are **not** touched |
 
@@ -68,20 +70,31 @@ Downloads. They show up in the report so you know where your space went.
 3. **Git check.** A candidate is deleted only if `git check-ignore` says it is ignored, so a
    committed `dist/` or `bin/` is never touched. Folders outside a git repo are kept unless you
    pass `-NoGitCheck`.
-4. **Age check.** Anything modified within `-OlderThanDays` (default 7) is kept, so the worktree
-   you are working in right now stays as it is.
+4. **Age check.** If anything *inside* the folder was written within `-OlderThanDays` (default 7),
+   it is kept, so the worktree you are working in right now stays as it is. (A folder's own
+   timestamp is not enough: Windows does not update it when files deeper inside change.)
 5. **No junction following.** Folders are deleted with `rmdir /s /q`, which removes
-   junctions/symlinks without going into them. In PowerShell 5.1, `Remove-Item -Recurse` can follow a
-   junction (for example a pnpm or monorepo workspace link inside `node_modules`) and delete the real
-   source it points to. Scanning and size measuring skip reparse points too.
-6. **Busy tools.** Cache cleanups that could break a running IDE are skipped while that IDE is open.
+   junctions/symlinks without going into them, so a pnpm or monorepo workspace link inside
+   `node_modules` never takes the real source with it. (Some older PowerShell builds had bugs
+   where `Remove-Item -Recurse` followed links. buildbroom does not rely on it.) Scanning and
+   size measuring skip reparse points too.
+6. **Tool and system folders are never scanned:** `AppData`, `Program Files`, `ProgramData`,
+   `Windows`, and tool homes like `~\.vscode`, `~\.cursor`, `~\.nuget`, `~\.gradle`, `~\.cargo`.
+   A `node_modules` in there belongs to an installed program (global npm, VS Code extensions, nvm).
+   Packages inside a `node_modules` are never mistaken for projects either.
+7. **No surprise scans.** The default `all` mode only scans for artifacts under roots you passed
+   or configured. `-Mode artifacts` without roots scans the current folder.
+8. **Busy or missing tools.** Cache cleanups that could break a running IDE are skipped while that
+   IDE is open. Caches whose tool is not on `PATH` are skipped and reported as such.
+9. **Honest report.** After `-Apply`, sizes are measured again, so the report shows what was
+   really freed, and folders that could not be fully deleted (files in use) are marked.
 
 ## Options
 
 | Option | Default | Meaning |
 |---|---|---|
 | `-Mode` | `all` | `all`, `caches` or `artifacts` |
-| `-Roots` | current folder | one or more folders to scan for artifacts |
+| `-Roots` | from config, else none | one or more folders to scan for artifacts |
 | `-OlderThanDays` | `7` | keep artifacts changed more recently than this |
 | `-TempDays` | `3` | keep Temp entries newer than this |
 | `-MaxDepth` | `8` | how deep to scan under each root |
