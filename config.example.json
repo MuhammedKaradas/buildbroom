@@ -1,0 +1,5 @@
+{
+  "roots": ["D:\code", "E:\work"],
+  "olderThanDays": 7,
+  "exclude": ["*\vendor-snapshots\*"]
+}
