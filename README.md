@@ -124,6 +124,11 @@ Run it every week or two, read the dry-run report, then repeat with `-Apply`. If
 to schedule it, use Task Scheduler. Schedule `-Mode caches -Apply` first. Turn on artifact cleanup
 only after a few dry runs show it picks the right folders.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Please follow the [code of conduct](CODE_OF_CONDUCT.md), and report
+security problems privately as described in [SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE)

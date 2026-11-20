@@ -1,0 +1,9 @@
+# Weekly pull requests for outdated GitHub Actions. The scripts themselves have no package dependencies.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
