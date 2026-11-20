@@ -68,7 +68,13 @@ if (Test-Path -LiteralPath $Config) {
         if (-not $PSBoundParameters.ContainsKey('Exclude')       -and $cfg.exclude)       { $Exclude = @($cfg.exclude) }
     } catch { Write-Warning "Could not read config $Config : $_" }
 }
-if (-not $Roots) { $Roots = @((Get-Location).Path) }
+# No roots given or configured: an explicit `-Mode artifacts` scans the current folder;
+# the default `all` mode does not, so running it from your home folder never scans everything.
+$RootsNote = $null
+if (-not $Roots) {
+    if ($Mode -eq 'artifacts') { $Roots = @((Get-Location).Path) }
+    else { $RootsNote = 'Artifacts skipped: no -Roots given and none in the config file.' }
+}
 
 # ---------------------------------------------------------------- helpers
 function Format-Size([double]$bytes) {
@@ -86,28 +92,37 @@ function Test-Reparse([IO.FileSystemInfo]$i) {
     return [bool]($i.Attributes -band [IO.FileAttributes]::ReparsePoint)
 }
 
-# Size of a directory tree, never following junctions/symlinks.
-function Get-DirBytes([string]$path) {
-    if (-not (Test-Path -LiteralPath $path)) { return 0 }
-    [double]$sum = 0
+# Size and newest write time of a directory tree, never following junctions/symlinks.
+# A folder's own LastWriteTime only changes when its direct children change, so the
+# newest time anywhere inside is the only reliable "was this used recently" signal.
+function Get-DirStats([string]$path) {
+    $r = [pscustomobject]@{ Bytes = [double]0; Newest = [datetime]::MinValue }
+    if (-not (Test-Path -LiteralPath $path)) { return $r }
+    $root = Get-Item -LiteralPath $path -Force
+    $r.Newest = $root.LastWriteTime
     $stack = New-Object System.Collections.Stack
-    $stack.Push((Get-Item -LiteralPath $path -Force))
+    $stack.Push($root)
     while ($stack.Count) {
         $dir = $stack.Pop()
         try { $items = $dir.GetFileSystemInfos() } catch { continue }
         foreach ($i in $items) {
+            if ($i.LastWriteTime -gt $r.Newest) { $r.Newest = $i.LastWriteTime }
             if (Test-Reparse $i) { continue }
-            if ($i -is [IO.DirectoryInfo]) { $stack.Push($i) } else { $sum += $i.Length }
+            if ($i -is [IO.DirectoryInfo]) { $stack.Push($i) } else { $r.Bytes += $i.Length }
         }
     }
-    return $sum
+    return $r
 }
+function Get-DirBytes([string]$path) { return (Get-DirStats $path).Bytes }
 
-# Remove a directory without following reparse points.
+# Remove a directory without following reparse points (rmdir /s removes a junction or
+# symlink itself and never enters it). Returns $true when the folder is fully gone.
 function Remove-DirSafe([string]$path) {
-    if (-not $Apply) { return }
-    if (-not (Test-Path -LiteralPath $path)) { return }
+    if (-not $Apply) { return $false }
+    if (-not (Test-Path -LiteralPath $path)) { return $true }
+    if ($path.Contains('%')) { Write-Warning "Skipping path with '%' (cmd would expand it): $path"; return $false }
     cmd /c "rmdir /s /q `"$path`"" 2>$null
+    return -not (Test-Path -LiteralPath $path)
 }
 
 function Test-Running([string[]]$names) {
@@ -126,17 +141,17 @@ function Add-Row($kind, $name, $bytes, $status) {
 
 # ---------------------------------------------------------------- caches
 $CacheTargets = @(
-    @{ Name = 'npm cache'; Path = "$LA\npm-cache\_cacache"; Block = @(); Run = {
-        if (Test-Cmd npm) { npm cache clean --force 2>$null | Out-Null } }
+    @{ Name = 'npm cache'; Path = "$LA\npm-cache\_cacache"; Tool = 'npm'; Block = @(); Run = {
+        npm cache clean --force 2>$null | Out-Null }
     }
-    @{ Name = 'Yarn cache'; Path = "$LA\Yarn\Cache"; Block = @(); Run = {
-        if (Test-Cmd yarn) { yarn cache clean 2>$null | Out-Null } }
+    @{ Name = 'Yarn cache'; Path = "$LA\Yarn\Cache"; Tool = 'yarn'; Block = @(); Run = {
+        yarn cache clean 2>$null | Out-Null }
     }
-    @{ Name = 'pnpm store (unreferenced only)'; Path = "$LA\pnpm"; Block = @(); Run = {
-        if (Test-Cmd pnpm) { pnpm store prune 2>$null | Out-Null } }
+    @{ Name = 'pnpm store (unreferenced only)'; Path = "$LA\pnpm"; Tool = 'pnpm'; Block = @(); Run = {
+        pnpm store prune 2>$null | Out-Null }
     }
-    @{ Name = 'Go build cache'; Path = "$LA\go-build"; Block = @(); Run = {
-        if (Test-Cmd go) { go clean -cache } }
+    @{ Name = 'Go build cache'; Path = "$LA\go-build"; Tool = 'go'; Block = @(); Run = {
+        go clean -cache }
     }
     @{ Name = 'Gradle caches + daemon logs'; Path = "$U\.gradle\caches"; Extra = @("$U\.gradle\daemon");
        Block = @('studio64', 'idea64'); Run = {
@@ -144,44 +159,50 @@ $CacheTargets = @(
             Where-Object { $_.CommandLine -match 'GradleDaemon' } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 2
-        Remove-DirSafe "$U\.gradle\caches"
-        Remove-DirSafe "$U\.gradle\daemon" }
+        [void](Remove-DirSafe "$U\.gradle\caches")
+        [void](Remove-DirSafe "$U\.gradle\daemon") }
     }
     @{ Name = 'NuGet http + plugins cache'; Path = "$LA\NuGet\v3-cache"; Extra = @("$LA\NuGet\plugins-cache");
-       Block = @('devenv', 'rider64'); Run = {
-        if (Test-Cmd dotnet) {
-            dotnet nuget locals http-cache --clear | Out-Null
-            dotnet nuget locals plugins-cache --clear | Out-Null
-        } }
+       Tool = 'dotnet'; Block = @('devenv', 'rider64'); Run = {
+        dotnet nuget locals http-cache --clear | Out-Null
+        dotnet nuget locals plugins-cache --clear | Out-Null }
     }
-    @{ Name = "Temp files older than $TempDays days"; Path = $null; Block = @(); Measure = {
-            $cut = (Get-Date).AddDays(-$TempDays); [double]$s = 0
-            Get-ChildItem -LiteralPath $env:TEMP -Force -ErrorAction SilentlyContinue |
-                Where-Object { $_.LastWriteTime -lt $cut -and -not (Test-Reparse $_) } |
-                ForEach-Object { if ($_ -is [IO.DirectoryInfo]) { $s += Get-DirBytes $_.FullName } else { $s += $_.Length } }
+    @{ Name = "Temp entries untouched for $TempDays days"; Path = $null; Block = @(); Measure = {
+            [double]$s = 0
+            foreach ($e in (Get-OldTempEntries)) { $s += $e.Bytes }
             $s }
        Run = {
-            $cut = (Get-Date).AddDays(-$TempDays)
-            Get-ChildItem -LiteralPath $env:TEMP -Force -ErrorAction SilentlyContinue |
-                Where-Object { $_.LastWriteTime -lt $cut } |
-                ForEach-Object {
-                    if ($_ -is [IO.DirectoryInfo]) { Remove-DirSafe $_.FullName }
-                    else { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
-                } }
+            foreach ($e in (Get-OldTempEntries)) {
+                if ($e.Item -is [IO.DirectoryInfo]) { [void](Remove-DirSafe $e.Item.FullName) }
+                else { Remove-Item -LiteralPath $e.Item.FullName -Force -ErrorAction SilentlyContinue }
+            } }
     }
     @{ Name = 'Crash dumps'; Path = "$LA\CrashDumps"; Block = @(); Run = {
         Get-ChildItem -LiteralPath "$LA\CrashDumps" -File -Force -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue }
     }
-    @{ Name = 'Docker build cache (images/containers/volumes untouched)'; Path = $null; Block = @(); Run = {
-        if ((Test-Cmd docker) -and (docker info 2>$null)) { docker builder prune -f 2>$null | Out-Null } }
+    @{ Name = 'Docker build cache (images/containers/volumes untouched)'; Path = $null; Tool = 'docker'; Block = @(); Run = {
+        if (docker info 2>$null) { docker builder prune -f 2>$null | Out-Null } }
     }
 )
 if ($Deep) {
-    $CacheTargets += @{ Name = '[deep] NuGet global packages'; Path = "$U\.nuget\packages";
-        Block = @('devenv', 'rider64'); Run = { if (Test-Cmd dotnet) { dotnet nuget locals global-packages --clear | Out-Null } } }
+    $CacheTargets += @{ Name = '[deep] NuGet global packages'; Path = "$U\.nuget\packages"; Tool = 'dotnet';
+        Block = @('devenv', 'rider64'); Run = { dotnet nuget locals global-packages --clear | Out-Null } }
     $CacheTargets += @{ Name = '[deep] Gradle wrapper distributions'; Path = "$U\.gradle\wrapper\dists";
-        Block = @('studio64', 'idea64'); Run = { Remove-DirSafe "$U\.gradle\wrapper\dists" } }
+        Block = @('studio64', 'idea64'); Run = { [void](Remove-DirSafe "$U\.gradle\wrapper\dists") } }
+}
+
+# Top-level Temp entries with nothing inside written for -TempDays days.
+function Get-OldTempEntries {
+    $cut = (Get-Date).AddDays(-$TempDays)
+    foreach ($i in (Get-ChildItem -LiteralPath $env:TEMP -Force -ErrorAction SilentlyContinue)) {
+        if ($i -is [IO.DirectoryInfo] -and -not (Test-Reparse $i)) {
+            $st = Get-DirStats $i.FullName
+            if ($st.Newest -lt $cut) { [pscustomobject]@{ Item = $i; Bytes = $st.Bytes } }
+        } elseif ($i.LastWriteTime -lt $cut) {
+            [pscustomobject]@{ Item = $i; Bytes = $(if ($i -is [IO.FileInfo]) { $i.Length } else { 0 }) }
+        }
+    }
 }
 
 $WatchOnly = [ordered]@{
@@ -199,10 +220,17 @@ function Invoke-Caches {
             $bytes = 0
             foreach ($p in @($t.Path) + @($t.Extra)) { if ($p) { $bytes += Get-DirBytes $p } }
         }
+        if ($t.Tool -and -not (Test-Cmd $t.Tool)) { Add-Row 'cache' $t.Name $bytes "skipped ($($t.Tool) not on PATH)"; continue }
         $busy = Test-Running $t.Block
         if ($busy) { Add-Row 'cache' $t.Name $bytes "skipped ($busy running)"; continue }
-        if ($Apply) { & $t.Run; Add-Row 'cache' $t.Name $bytes 'cleaned' }
-        else        { Add-Row 'cache' $t.Name $bytes 'would clean' }
+        if (-not $Apply) { Add-Row 'cache' $t.Name $bytes 'would clean'; continue }
+        & $t.Run
+        # Report what was really freed, not what we hoped to free.
+        if ($t.Measure) { $after = & $t.Measure }
+        else { $after = 0; foreach ($p in @($t.Path) + @($t.Extra)) { if ($p) { $after += Get-DirBytes $p } } }
+        $freed = [math]::Max(0, $bytes - $after)
+        $status = if ($after -gt 0 -and $freed -lt $bytes) { "cleaned ($(Format-Size $after) left, in use or kept by the tool)" } else { 'cleaned' }
+        Add-Row 'cache' $t.Name $freed $status
     }
     foreach ($k in $WatchOnly.Keys) {
         $b = Get-DirBytes $WatchOnly[$k]
@@ -231,7 +259,25 @@ $ArtifactRules = [ordered]@{
     '.pytest_cache' = @('*.py', 'pytest.ini', 'pyproject.toml')
     '.mypy_cache'   = @('*.py', 'pyproject.toml')
 }
-$NeverDescend = @('.git', '.hg', '.svn', '.vs', '.idea')
+# Folder names never scanned into. node_modules is here too: when it is not itself a
+# candidate, its packages (each with a package.json) must never be mistaken for projects.
+$NeverDescend = @('.git', '.hg', '.svn', '.vs', '.idea', 'node_modules')
+
+# Tool and OS locations never scanned, even if a root contains them. A node_modules or
+# bin folder in there belongs to an installed program (global npm, VS Code extensions,
+# nvm Node versions ...) and deleting it breaks that program.
+$NeverScan = @(
+    $env:APPDATA, $LA, "$U\AppData", $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData, $env:windir,
+    "$U\.vscode", "$U\.vscode-insiders", "$U\.cursor", "$U\.nuget", "$U\.gradle", "$U\.android",
+    "$U\.cargo", "$U\.rustup", "$U\.npm", "$U\.nvm", "$U\scoop", "$U\go\pkg"
+) | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') }
+
+function Test-NeverScan([string]$path) {
+    foreach ($n in $NeverScan) {
+        if ($path -eq $n -or $path.StartsWith("$n\", [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
 
 function Test-Marker([string]$parent, [string[]]$markers) {
     foreach ($m in $markers) {
@@ -256,10 +302,11 @@ function Find-Artifacts([string]$root) {
         try { $subs = $dir.GetDirectories() } catch { continue }
         foreach ($s in $subs) {
             if (Test-Reparse $s) { continue }
-            if ($NeverDescend -contains $s.Name) { continue }
+            if (Test-NeverScan $s.FullName) { continue }
             if ($ArtifactRules.Contains($s.Name) -and (Test-Marker $dir.FullName $ArtifactRules[$s.Name])) {
                 [void]$found.Add($s); continue          # never descend into an artifact
             }
+            if ($NeverDescend -contains $s.Name) { continue }
             if ($depth + 1 -lt $MaxDepth) { $stack.Push(@($s, ($depth + 1))) }
         }
     }
@@ -270,19 +317,26 @@ function Invoke-Artifacts {
     $cut = (Get-Date).AddDays(-$OlderThanDays)
     foreach ($root in $Roots) {
         if (-not (Test-Path -LiteralPath $root)) { Write-Warning "Root not found: $root"; continue }
+        $root = (Resolve-Path -LiteralPath $root).ProviderPath.TrimEnd('\')
+        if (Test-NeverScan $root) { Write-Warning "Root is a tool/system folder, skipped: $root"; continue }
         Write-Host "Scanning $root ..." -ForegroundColor DarkGray
         foreach ($a in (Find-Artifacts $root)) {
             $path = $a.FullName
             if ($Exclude | Where-Object { $path -like $_ }) { continue }
-            $bytes = Get-DirBytes $path
-            if ($a.LastWriteTime -gt $cut) { Add-Row 'artifact' $path $bytes "kept (changed < $OlderThanDays d)"; continue }
+            $st = Get-DirStats $path
+            $bytes = $st.Bytes
+            if ($st.Newest -gt $cut) { Add-Row 'artifact' $path $bytes "kept (used < $OlderThanDays d ago)"; continue }
             if (-not $NoGitCheck) {
                 $g = Get-GitIgnoreState $a.Parent.FullName $a.Name
                 if ($g -eq 1)  { Add-Row 'artifact' $path $bytes 'kept (tracked by git)'; continue }
                 if ($g -ne 0)  { Add-Row 'artifact' $path $bytes 'kept (not a git repo; -NoGitCheck)'; continue }
             }
-            if ($Apply) { Remove-DirSafe $path; Add-Row 'artifact' $path $bytes 'deleted' }
-            else        { Add-Row 'artifact' $path $bytes 'would delete' }
+            if (-not $Apply) { Add-Row 'artifact' $path $bytes 'would delete'; continue }
+            if (Remove-DirSafe $path) { Add-Row 'artifact' $path $bytes 'deleted' }
+            else {
+                $left = Get-DirBytes $path
+                Add-Row 'artifact' $path ([math]::Max(0, $bytes - $left)) "partly deleted ($(Format-Size $left) in use)"
+            }
         }
     }
 }
@@ -294,14 +348,16 @@ Write-Host "buildbroom $Version - $modeText" -ForegroundColor Cyan
 Write-Host ("Free on {0}: {1}" -f $env:SystemDrive, (Format-Size $free0)) -ForegroundColor Cyan
 
 if ($Mode -in 'all', 'caches')    { Invoke-Caches }
-if ($Mode -in 'all', 'artifacts') { Invoke-Artifacts }
+if ($Mode -in 'all', 'artifacts') {
+    if ($RootsNote) { Write-Host $RootsNote -ForegroundColor Yellow } else { Invoke-Artifacts }
+}
 
 $script:Rows |
     Where-Object { $_.Size -gt 0 } |
     Sort-Object Kind, @{ e = 'Size'; Descending = $true } |
     Format-Table Kind, @{ n = 'Size'; e = { Format-Size $_.Size }; a = 'right' }, Status, Item -AutoSize -Wrap
 
-$actionable = $script:Rows | Where-Object { $_.Status -in 'would clean', 'would delete', 'cleaned', 'deleted' }
+$actionable = $script:Rows | Where-Object { $_.Status -match '^(would clean|would delete|cleaned|deleted|partly deleted)' }
 $sum = ($actionable | Measure-Object Size -Sum).Sum
 if ($Apply) {
     $free1 = Get-FreeBytes
@@ -309,3 +365,5 @@ if ($Apply) {
 } else {
     Write-Host ("Reclaimable: ~{0}. Run again with -Apply to clean." -f (Format-Size $sum)) -ForegroundColor Green
 }
+
+exit 0
