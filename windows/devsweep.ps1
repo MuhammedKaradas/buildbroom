@@ -126,7 +126,7 @@ function Add-Row($kind, $name, $bytes, $status) {
 
 # ---------------------------------------------------------------- caches
 $CacheTargets = @(
-    @{ Name = 'npm cache'; Path = "$LA\npm-cache"; Block = @(); Run = {
+    @{ Name = 'npm cache'; Path = "$LA\npm-cache\_cacache"; Block = @(); Run = {
         if (Test-Cmd npm) { npm cache clean --force 2>$null | Out-Null } }
     }
     @{ Name = 'Yarn cache'; Path = "$LA\Yarn\Cache"; Block = @(); Run = {
