@@ -7,6 +7,9 @@
   Run locally:  powershell -NoProfile -ExecutionPolicy Bypass -File tests\safety.ps1
 #>
 $ErrorActionPreference = 'Stop'
+# Run buildbroom with the same PowerShell that runs this test (5.1 or 7), so CI really covers both.
+$PSExe = (Get-Process -Id $PID).Path
+Write-Host "Testing with PowerShell $($PSVersionTable.PSVersion) ($PSExe)"
 $script = Join-Path $PSScriptRoot '..\windows\buildbroom.ps1'
 # Temp lives under AppData, which buildbroom refuses to scan, so the fixture goes elsewhere.
 $F = Join-Path $env:SystemDrive ("bb-fixture-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -24,7 +27,7 @@ function Assert([string]$name, [bool]$ok) {
     else     { Write-Host "  FAIL  $name" -ForegroundColor Red; $script:failed++ }
 }
 function Invoke-BB([string[]]$extra) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Mode artifacts -Roots $F -Config "$F\none.json" @extra | Out-Host
+    & $PSExe -NoProfile -ExecutionPolicy Bypass -File $script -Mode artifacts -Roots $F -Config "$F\none.json" @extra | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "buildbroom exited with $LASTEXITCODE" }
 }
 
@@ -77,12 +80,12 @@ try {
     Assert 'non-git node_modules still kept'         (Test-Path "$F\nogit\node_modules")
 
     Write-Host "`n== a root under AppData is refused"
-    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Mode artifacts -Roots $env:LOCALAPPDATA -Config "$F\none.json" 2>&1 | Out-String
+    $out = & $PSExe -NoProfile -ExecutionPolicy Bypass -File $script -Mode artifacts -Roots $env:LOCALAPPDATA -Config "$F\none.json" 2>&1 | Out-String
     Assert 'AppData root skipped' ($out -match 'tool/system folder, skipped')
 
     Write-Host "`n== default mode without roots does not scan the current folder"
     Push-Location "$F\repo"
-    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Config "$F\none.json" 2>&1 | Out-String
+    $out = & $PSExe -NoProfile -ExecutionPolicy Bypass -File $script -Config "$F\none.json" 2>&1 | Out-String
     Pop-Location
     Assert 'artifacts skipped without roots' ($out -match 'Artifacts skipped')
 }

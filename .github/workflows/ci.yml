@@ -30,7 +30,7 @@ jobs:
           if ($issues) { exit 1 }
 
       - name: Safety test
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/safety.ps1
+        run: ./tests/safety.ps1
 
       - name: Dry run (caches)
-        run: .\buildbroom.cmd -Mode caches
+        run: ./windows/buildbroom.ps1 -Mode caches
