@@ -5,7 +5,8 @@ through the [security policy](SECURITY.md), not public issues.
 
 ## Getting started
 
-You need Windows 10 or 11 with Windows PowerShell 5.1 (built in) or PowerShell 7, and git.
+On Windows you need Windows 10 or 11 with Windows PowerShell 5.1 (built in) or PowerShell 7, and git.
+On macOS you need the built-in bash and git; install [ShellCheck](https://www.shellcheck.net/) (`brew install shellcheck`) to lint.
 
 ```powershell
 git clone https://github.com/MuhammedKaradas/buildbroom.git
@@ -14,7 +15,15 @@ cd buildbroom
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\safety.ps1
 ```
 
-`tests\safety.ps1` builds a throwaway folder tree, runs buildbroom with `-Apply` against it and checks what was
+On macOS:
+
+```bash
+unix/buildbroom.sh --mode caches                    # dry run, deletes nothing
+shellcheck -x unix/buildbroom.sh tests/safety.sh
+BB_BASH=/bin/bash bash tests/safety.sh              # bash 3.2, the macOS default
+```
+
+`tests\safety.ps1` (and `tests/safety.sh`) builds a throwaway folder tree, runs buildbroom with `-Apply` against it and checks what was
 deleted and what survived. It never touches your real projects. Run it before every PR.
 
 **While developing, never run `-Apply` on real folders until the dry run shows exactly what you expect.**
@@ -27,9 +36,15 @@ deleted and what survived. It never touches your real projects. Run it before ev
 - **Build folder:** add it to `$ArtifactRules` with the marker files that must sit next to it. A rule without a
   specific marker (for example `build` next to any file) is not accepted.
 - If it is big but not safe to delete automatically, add it to `$WatchOnly` so it is only reported.
+- **On macOS / unix:** caches and report-only items go in `os_register_caches` in `unix/lib/macos.sh`
+  (`add_cache` / `add_watch`, the arguments are explained in `unix/lib/common.sh`). Build folder rules are
+  shared by every unix platform: `ARTIFACT_RULES` in `unix/lib/common.sh`. Keep the scripts bash 3.2
+  compatible and use only flags that BSD and GNU tools both have.
 - Update both READMEs (`README.md`, `README.tr.md`).
 
-macOS and Linux support is planned (#1, #2). Comment on those issues before starting, so the approach can be agreed.
+Linux support is planned (#2): it goes in `unix/lib/linux.sh`, which fills the same `os_*` hooks as
+`unix/lib/macos.sh` and may redefine any function of `unix/lib/common.sh`. Comment on the issue before starting, so
+the approach can be agreed.
 
 ## Branches
 
@@ -52,14 +67,15 @@ We use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/), i
 ## Pull requests
 
 - Fill in the PR template.
-- CI runs PSScriptAnalyzer and the safety test on Windows PowerShell 5.1 and PowerShell 7, and a secret scan
+- CI runs PSScriptAnalyzer and the safety test on Windows PowerShell 5.1 and PowerShell 7, ShellCheck and the
+  unix safety test on macOS with bash 3.2 and bash 5, and a secret scan
   (gitleaks) over the PR's commits. A token or key that was committed must be revoked, not just removed in a later
   commit.
 - Dependabot opens weekly PRs for outdated GitHub Actions.
 
 ## Releasing
 
-1. Update `$Version` in `windows/buildbroom.ps1` and merge it into `main`.
+1. Update `$Version` in `windows/buildbroom.ps1` and `BB_VERSION` in `unix/lib/common.sh` and merge it into `main`.
 2. Tag and push:
    ```bash
    git tag v0.1.0
