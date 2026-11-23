@@ -11,7 +11,7 @@ drive fills up again every few weeks. Each time you end up looking up which fold
 
 buildbroom keeps that knowledge in one script, and **does nothing destructive unless you ask it to**.
 
-> Status: **Windows (PowerShell 5.1+)** works today. macOS and Linux are planned. See [ROADMAP](docs/ROADMAP.md).
+> Status: **Windows (PowerShell 5.1+)** and **macOS (bash 3.2+)** work today. Linux is planned. See [ROADMAP](docs/ROADMAP.md).
 
 ## Quick start (Windows)
 
@@ -27,6 +27,21 @@ cd buildbroom
 
 `buildbroom.cmd` just runs `windows\buildbroom.ps1` with `-ExecutionPolicy Bypass`, so you don't have to
 change your execution policy. You can also call the `.ps1` directly.
+
+## Quick start (macOS)
+
+```bash
+git clone https://github.com/MuhammedKaradas/buildbroom.git
+cd buildbroom
+
+unix/buildbroom.sh                                  # dry run: report caches (+ artifacts under your configured roots)
+unix/buildbroom.sh --mode artifacts --roots ~/code,~/work
+unix/buildbroom.sh --mode artifacts --roots ~/code --older-than-days 14 --apply
+unix/buildbroom.sh --mode caches --apply
+```
+
+It runs on the bash 3.2 that ships with macOS and needs nothing else. To call it as `buildbroom`, link it
+somewhere on your `PATH`: `ln -s "$PWD/unix/buildbroom.sh" /usr/local/bin/buildbroom`.
 
 ## What it cleans
 
@@ -49,6 +64,26 @@ downloads them again.
 
 **Report only, never deleted:** Docker Desktop / WSL virtual disks, Android SDK, Android emulators,
 Downloads. They show up in the report so you know where your space went.
+
+#### On macOS
+
+| Target | How |
+|---|---|
+| npm, Yarn, pnpm, Go build cache | same commands as above (`~/.npm`, `~/Library/Caches/Yarn`, `~/Library/pnpm/store`, `go env GOCACHE`) |
+| Gradle `caches/` + `daemon/` logs | skipped while Android Studio / IntelliJ is open **or a Gradle daemon is running** (it is never killed; run `./gradlew --stop` first) |
+| NuGet http + plugins cache | `dotnet nuget locals ... --clear`; skipped while Rider is open |
+| Xcode `DerivedData` | skipped while Xcode or `xcodebuild` is running |
+| Xcode device support | only `iOS/watchOS/... DeviceSupport` folders unused for 90 days. Xcode copies them again when that device connects |
+| CocoaPods cache | `pod cache clean --all` |
+| SwiftPM cache | `~/Library/Caches/org.swift.swiftpm`; skipped while Xcode is running |
+| Homebrew | `brew cleanup` (old downloads and old versions) |
+| Docker build cache | `docker builder prune -f`, only when Docker is running |
+
+With `--deep`: Go module cache (`go clean -modcache`), Gradle wrapper distributions and NuGet global packages.
+
+**Report only:** Xcode archives, iOS simulators (`xcrun simctl delete unavailable` frees the stale ones),
+Android SDK, Android emulators. Docker's disk image and `~/Downloads` are not measured, because reading them
+makes macOS ask for folder access.
 
 ### `artifacts` (per project, under `-Roots`)
 
@@ -77,11 +112,14 @@ Downloads. They show up in the report so you know where your space went.
    junctions/symlinks without going into them, so a pnpm or monorepo workspace link inside
    `node_modules` never takes the real source with it. (Some older PowerShell builds had bugs
    where `Remove-Item -Recurse` followed links. buildbroom does not rely on it.) Scanning and
-   size measuring skip reparse points too.
+   size measuring skip reparse points too. On macOS, `rm -rf` removes a symlink as a link and never enters
+   it, and scanning and measuring use `find -P` / `du -P`, which never follow links.
 6. **Tool and system folders are never scanned:** `AppData`, `Program Files`, `ProgramData`,
    `Windows`, and tool homes like `~\.vscode`, `~\.cursor`, `~\.nuget`, `~\.gradle`, `~\.cargo`.
    A `node_modules` in there belongs to an installed program (global npm, VS Code extensions, nvm).
    Packages inside a `node_modules` are never mistaken for projects either.
+   On macOS: `/System`, `/Library`, `/Applications`, `/usr`, `/opt` (Homebrew), `~/Library` and tool homes
+   such as `~/.nvm`, `~/.cargo`, `~/.gradle`, plus the Flutter SDK found on your `PATH`. Paths are compared case-insensitively, like APFS does.
 7. **No surprise scans.** The default `all` mode only scans for artifacts under roots you passed
    or configured. `-Mode artifacts` without roots scans the current folder.
 8. **Busy or missing tools.** Cache cleanups that could break a running IDE are skipped while that
@@ -91,17 +129,18 @@ Downloads. They show up in the report so you know where your space went.
 
 ## Options
 
-| Option | Default | Meaning |
-|---|---|---|
-| `-Mode` | `all` | `all`, `caches` or `artifacts` |
-| `-Roots` | from config, else none | one or more folders to scan for artifacts |
-| `-OlderThanDays` | `7` | keep artifacts changed more recently than this |
-| `-TempDays` | `3` | keep Temp entries newer than this |
-| `-MaxDepth` | `8` | how deep to scan under each root |
-| `-Exclude` | | wildcard paths to skip, e.g. `*\keep-me\*` |
-| `-NoGitCheck` | off | also clean artifacts in folders that are not git repos |
-| `-Deep` | off | also clear NuGet global packages and Gradle wrapper distributions |
-| `-Apply` | off | actually delete |
+| Windows | macOS | Default | Meaning |
+|---|---|---|---|
+| `-Mode` | `--mode` | `all` | `all`, `caches` or `artifacts` |
+| `-Roots` | `--roots` | from config, else none | one or more folders to scan for artifacts (comma-separated or repeated) |
+| `-OlderThanDays` | `--older-than-days` | `7` | keep artifacts changed more recently than this |
+| `-TempDays` | | `3` | keep Temp entries newer than this (macOS cleans its temp folder itself) |
+| `-MaxDepth` | `--max-depth` | `8` | how deep to scan under each root |
+| `-Exclude` | `--exclude` | | wildcard paths to skip, e.g. `*\keep-me\*` / `*/keep-me/*` |
+| `-NoGitCheck` | `--no-git-check` | off | also clean artifacts in folders that are not git repos |
+| `-Deep` | `--deep` | off | also clear big caches that take long to download again (see above) |
+| `-Apply` | `--apply` | off | actually delete |
+| `-Config` | `--config` | see below | config file to read |
 
 ## Config file
 
@@ -116,12 +155,15 @@ So you don't have to type your roots every time, put them in
 }
 ```
 
+On macOS the file is `~/.config/buildbroom/config.json` (or under `$XDG_CONFIG_HOME`), with paths like
+`"~/code"`. It is read with the built-in `plutil` (macOS 12 or later).
+
 Command-line options override the config.
 
 ## Running it regularly
 
 Run it every week or two, read the dry-run report, then repeat with `-Apply`. If you prefer
-to schedule it, use Task Scheduler. Schedule `-Mode caches -Apply` first. Turn on artifact cleanup
+to schedule it, use Task Scheduler on Windows, or `cron` / a launchd agent on macOS. Schedule `-Mode caches -Apply` first. Turn on artifact cleanup
 only after a few dry runs show it picks the right folders.
 
 ## Contributing

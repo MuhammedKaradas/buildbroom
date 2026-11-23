@@ -12,7 +12,7 @@ yeniden araştırırsın.
 
 buildbroom bu bilgiyi tek bir scriptte tutar ve **sen istemedikçe hiçbir şeyi silmez**.
 
-> Durum: **Windows (PowerShell 5.1+)** bugün çalışıyor. macOS ve Linux planlandı. Bkz. [ROADMAP](docs/ROADMAP.md).
+> Durum: **Windows (PowerShell 5.1+)** ve **macOS (bash 3.2+)** bugün çalışıyor. Linux planlandı. Bkz. [ROADMAP](docs/ROADMAP.md).
 
 ## Hızlı başlangıç (Windows)
 
@@ -28,6 +28,21 @@ cd buildbroom
 
 `buildbroom.cmd` sadece `windows\buildbroom.ps1`'i `-ExecutionPolicy Bypass` ile çalıştırır. Böylece
 execution policy ayarını değiştirmen gerekmez. İstersen `.ps1`'i doğrudan da çağırabilirsin.
+
+## Hızlı başlangıç (macOS)
+
+```bash
+git clone https://github.com/MuhammedKaradas/buildbroom.git
+cd buildbroom
+
+unix/buildbroom.sh                                  # kuru çalıştırma: önbellekleri (+ config'teki köklerdeki kalıntıları) raporla
+unix/buildbroom.sh --mode artifacts --roots ~/code,~/work
+unix/buildbroom.sh --mode artifacts --roots ~/code --older-than-days 14 --apply
+unix/buildbroom.sh --mode caches --apply
+```
+
+macOS ile gelen bash 3.2 ile çalışır, başka bir şey gerektirmez. `buildbroom` diye çağırmak için
+`PATH`'teki bir yere link ver: `ln -s "$PWD/unix/buildbroom.sh" /usr/local/bin/buildbroom`.
 
 ## Neleri temizler
 
@@ -50,6 +65,26 @@ build bunları yeniden indirir.
 
 **Sadece raporlanır, asla silinmez:** Docker Desktop / WSL sanal diskleri, Android SDK, Android
 emülatörleri, İndirilenler. Alanın nereye gittiğini görebilmen için raporda gösterilirler.
+
+#### macOS'ta
+
+| Hedef | Nasıl |
+|---|---|
+| npm, Yarn, pnpm, Go build önbelleği | yukarıdaki komutlar (`~/.npm`, `~/Library/Caches/Yarn`, `~/Library/pnpm/store`, `go env GOCACHE`) |
+| Gradle `caches/` + `daemon/` logları | Android Studio / IntelliJ açıkken **veya bir Gradle daemon'ı çalışırken** atlanır (daemon asla öldürülmez, önce `./gradlew --stop` çalıştır) |
+| NuGet http + plugin önbelleği | `dotnet nuget locals ... --clear`. Rider açıkken atlanır |
+| Xcode `DerivedData` | Xcode veya `xcodebuild` çalışırken atlanır |
+| Xcode device support | sadece 90 gündür kullanılmayan `iOS/watchOS/... DeviceSupport` klasörleri. O cihaz bağlanınca Xcode yeniden kopyalar |
+| CocoaPods önbelleği | `pod cache clean --all` |
+| SwiftPM önbelleği | `~/Library/Caches/org.swift.swiftpm`. Xcode çalışırken atlanır |
+| Homebrew | `brew cleanup` (eski indirmeler ve eski sürümler) |
+| Docker build önbelleği | `docker builder prune -f`, sadece Docker çalışıyorsa |
+
+`--deep` ile ek olarak: Go modül önbelleği (`go clean -modcache`), Gradle wrapper dağıtımları ve NuGet global paketleri.
+
+**Sadece raporlanır:** Xcode arşivleri, iOS simülatörleri (`xcrun simctl delete unavailable` eskilerini siler),
+Android SDK, Android emülatörleri. Docker'ın disk imajı ve `~/Downloads` ölçülmez, çünkü onları okumak macOS'un
+klasör erişim izni sormasına yol açar.
 
 ### `artifacts` (proje bazında, `-Roots` altında)
 
@@ -78,11 +113,14 @@ emülatörleri, İndirilenler. Alanın nereye gittiğini görebilmen için rapor
    symlink'leri içine girmeden kaldırır. Yani `node_modules` içindeki bir pnpm veya monorepo
    workspace linki, gösterdiği gerçek kaynak kodu da beraberinde götürmez. (Bazı eski PowerShell
    sürümlerinde `Remove-Item -Recurse` linkleri takip edebiliyordu. buildbroom ona güvenmez.)
-   Tarama ve boyut ölçümü de reparse point'leri atlar.
+   Tarama ve boyut ölçümü de reparse point'leri atlar. macOS'ta `rm -rf` bir symlink'i link olarak siler ve
+   içine girmez. Tarama ve ölçüm de linkleri asla takip etmeyen `find -P` / `du -P` ile yapılır.
 6. **Araç ve sistem klasörleri asla taranmaz:** `AppData`, `Program Files`, `ProgramData`,
    `Windows`, ayrıca `~\.vscode`, `~\.cursor`, `~\.nuget`, `~\.gradle`, `~\.cargo` gibi araç
    klasörleri. Oralardaki bir `node_modules` kurulu bir programa aittir (global npm, VS Code
    eklentileri, nvm). Bir `node_modules`'un içindeki paketler de asla proje sanılmaz.
+   macOS'ta: `/System`, `/Library`, `/Applications`, `/usr`, `/opt` (Homebrew), `~/Library` ve `~/.nvm`,
+   `~/.cargo`, `~/.gradle` gibi araç klasörleri, ayrıca `PATH`'teki Flutter SDK. Yollar, APFS'teki gibi büyük/küçük harf ayırmadan karşılaştırılır.
 7. **Sürpriz tarama yok.** Varsayılan `all` modu, kalıntıları sadece senin verdiğin ya da config'e
    yazdığın köklerde arar. Kök verilmeden `-Mode artifacts` çalıştırılırsa bulunduğun klasörü tarar.
 8. **Meşgul veya eksik araçlar.** Açık bir IDE'yi bozabilecek önbellek temizlikleri, o IDE açıkken
@@ -92,17 +130,18 @@ emülatörleri, İndirilenler. Alanın nereye gittiğini görebilmen için rapor
 
 ## Seçenekler
 
-| Seçenek | Varsayılan | Anlamı |
-|---|---|---|
-| `-Mode` | `all` | `all`, `caches` veya `artifacts` |
-| `-Roots` | config, yoksa yok | kalıntı aranacak bir veya daha fazla klasör |
-| `-OlderThanDays` | `7` | bundan daha yakın zamanda kullanılmış kalıntıları koru |
-| `-TempDays` | `3` | bundan yeni Temp öğelerini koru |
-| `-MaxDepth` | `8` | her kökün altında ne kadar derine inileceği |
-| `-Exclude` | | atlanacak yollar (joker karakterli), ör. `*\keep-me\*` |
-| `-NoGitCheck` | kapalı | git reposu olmayan klasörlerdeki kalıntıları da temizle |
-| `-Deep` | kapalı | NuGet global paketlerini ve Gradle wrapper dağıtımlarını da sil |
-| `-Apply` | kapalı | gerçekten sil |
+| Windows | macOS | Varsayılan | Anlamı |
+|---|---|---|---|
+| `-Mode` | `--mode` | `all` | `all`, `caches` veya `artifacts` |
+| `-Roots` | `--roots` | config, yoksa yok | kalıntı aranacak bir veya daha fazla klasör (virgülle ayrılmış ya da tekrarlanmış) |
+| `-OlderThanDays` | `--older-than-days` | `7` | bundan daha yakın zamanda kullanılmış kalıntıları koru |
+| `-TempDays` | | `3` | bundan yeni Temp öğelerini koru (macOS temp klasörünü kendisi temizler) |
+| `-MaxDepth` | `--max-depth` | `8` | her kökün altında ne kadar derine inileceği |
+| `-Exclude` | `--exclude` | | atlanacak yollar (joker karakterli), ör. `*\keep-me\*` / `*/keep-me/*` |
+| `-NoGitCheck` | `--no-git-check` | kapalı | git reposu olmayan klasörlerdeki kalıntıları da temizle |
+| `-Deep` | `--deep` | kapalı | yeniden indirmesi uzun süren büyük önbellekleri de sil (bkz. yukarısı) |
+| `-Apply` | `--apply` | kapalı | gerçekten sil |
+| `-Config` | `--config` | aşağıya bak | okunacak config dosyası |
 
 ## Config dosyası
 
@@ -117,12 +156,15 @@ Kökleri her seferinde yazmamak için `%USERPROFILE%\.config\buildbroom\config.j
 }
 ```
 
+macOS'ta dosya `~/.config/buildbroom/config.json` (ya da `$XDG_CONFIG_HOME` altında), yollar `"~/code"`
+gibi yazılabilir. Dosya yerleşik `plutil` ile okunur (macOS 12 veya üstü).
+
 Komut satırı seçenekleri config'i ezer.
 
 ## Düzenli çalıştırma
 
 Bir-iki haftada bir çalıştır, kuru çalıştırma raporunu oku, sonra `-Apply` ile tekrarla.
-Zamanlamak istersen Görev Zamanlayıcı'yı kullan. Önce `-Mode caches -Apply`'ı zamanla. Kalıntı
+Zamanlamak istersen Windows'ta Görev Zamanlayıcı'yı, macOS'ta `cron` ya da bir launchd agent'ı kullan. Önce `-Mode caches -Apply`'ı zamanla. Kalıntı
 temizliğini ise ancak birkaç kuru çalıştırma doğru klasörleri seçtiğini gösterdikten sonra aç.
 
 ## Katkı
