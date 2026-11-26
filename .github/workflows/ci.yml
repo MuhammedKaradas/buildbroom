@@ -30,10 +30,10 @@ jobs:
           if ($issues) { exit 1 }
 
       - name: Safety test
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/safety.ps1
+        run: ./tests/safety.ps1
 
       - name: Dry run (caches)
-        run: .\buildbroom.cmd -Mode caches
+        run: ./windows/buildbroom.ps1 -Mode caches
 
   # Lint the unix script and run its safety test on the macOS default bash 3.2 and on bash 5.
   macos:
