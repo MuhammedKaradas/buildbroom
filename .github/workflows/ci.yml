@@ -1,6 +1,6 @@
 name: CI
 
-# Lint the script and run the safety test on Windows PowerShell 5.1 and PowerShell 7.
+# Lint the scripts and run the safety tests: Windows (PowerShell 5.1 and 7) and macOS (bash 3.2 and 5).
 on:
   push:
     branches: [main]
@@ -34,3 +34,34 @@ jobs:
 
       - name: Dry run (caches)
         run: ./windows/buildbroom.ps1 -Mode caches
+
+  # Lint the unix script and run its safety test on the macOS default bash 3.2 and on bash 5.
+  macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        bash: [/bin/bash, bash5]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tools
+        run: |
+          command -v shellcheck >/dev/null || brew install shellcheck
+          if [ "${{ matrix.bash }}" = bash5 ]; then
+            brew list bash >/dev/null 2>&1 || brew install bash
+            echo "BB_BASH=$(brew --prefix)/bin/bash" >> "$GITHUB_ENV"
+          else
+            echo "BB_BASH=/bin/bash" >> "$GITHUB_ENV"
+          fi
+
+      - name: ShellCheck
+        run: shellcheck -x unix/buildbroom.sh tests/safety.sh
+
+      - name: Safety test
+        run: |
+          "$BB_BASH" --version | head -1
+          "$BB_BASH" tests/safety.sh
+
+      - name: Dry run (caches)
+        run: '"$BB_BASH" unix/buildbroom.sh --mode caches'

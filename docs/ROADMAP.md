@@ -6,7 +6,9 @@
 - Junction-safe deletion
 
 ## v0.2: macOS + Linux
-- `unix/buildbroom.sh` (bash) with the same flags and the same safety rules
+- macOS (done, #1): `unix/buildbroom.sh` (bash 3.2+) with the same options as `--flags` and the same
+  safety rules; shared logic in `unix/lib/common.sh`, platform locations in `unix/lib/macos.sh`
+- Linux (#2): `unix/lib/linux.sh` on top of the same core
 - Cache locations: `~/.npm`, `~/.cache/*`, `~/Library/Caches/*`, `~/.gradle`, `~/go/pkg/mod`
   (with `-Deep` only), Xcode `DerivedData`, iOS simulators (report only), Homebrew `brew cleanup`
 - Never follow symlinks (`find -P`, `rm -rf` on the link itself only)
