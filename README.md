@@ -154,7 +154,26 @@ Active worktrees are not listed.
 | `-NoGitCheck` | `--no-git-check` | off | also clean artifacts in folders that are not git repos |
 | `-Deep` | `--deep` | off | also clear big caches that take long to download again (see above) |
 | `-Apply` | `--apply` | off | actually delete |
+| | `--json` | off | print the report as JSON (see below) |
 | `-Config` | `--config` | see below | config file to read |
+
+## JSON output (macOS)
+
+`--json` prints the whole report as one JSON object on stdout, for scripts, CI or a scheduled run. Progress
+lines go to stderr, so `unix/buildbroom.sh --json --roots ~/code > report.json` gives a clean file. Every row is
+included, also skipped and kept ones. `name` is set for caches and report-only items, `path` for folders,
+`newestWrite` (the newest write inside, UTC) for artifacts. `freeBytesAfter` is only set with `--apply`.
+
+```json
+{
+  "version": "0.1.0", "os": "macOS", "mode": "artifacts", "apply": false,
+  "freeBytes": 201265348608, "freeBytesAfter": null, "reclaimableBytes": 1880000000,
+  "items": [
+    {"kind": "artifact", "name": null, "path": "/Users/me/code/app/node_modules", "bytes": 1880000000,
+     "status": "would delete", "newestWrite": "2026-10-02T08:14:00Z"}
+  ]
+}
+```
 
 ## Config file
 

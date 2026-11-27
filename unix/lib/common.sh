@@ -20,6 +20,7 @@ EXCLUDE=()
 NO_GIT_CHECK=0
 DEEP=0
 APPLY=0
+JSON=0
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/buildbroom/config.json"
 SET_ROOTS=0
 SET_OLDER=0
@@ -35,6 +36,8 @@ os_register_caches() { :; }     # call add_cache / add_watch
 os_config_scalar() { return 1; }  # FILE KEY -> print value
 os_config_list() { return 1; }    # FILE KEY -> print one element per line
 os_config_valid() { return 1; }   # FILE -> 0 when the file can be read
+MTIME_CMD=()                    # command printing the mtime (epoch) of each argument, e.g. stat -f %m
+os_iso_time() { printf '%s' "$1"; }  # EPOCH -> ISO 8601 UTC
 
 # ---------------------------------------------------------------- output helpers
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -150,8 +153,22 @@ expand_tilde() {
 }
 
 # ---------------------------------------------------------------- report rows
+# One tab-separated line per row: KIND BYTES STATUS NAME PATH NEWEST
+#   NAME    cache / report-only label ('' for artifacts and worktrees)
+#   PATH    folder ('' for caches)
+#   NEWEST  newest write inside, ISO 8601 UTC ('' when not measured; only with --json)
 ROWS_FILE=
-add_row() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$ROWS_FILE"; }
+add_row() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "${6:-}" >> "$ROWS_FILE"; }
+
+# Newest write time anywhere in a tree (symlinks not followed), as ISO 8601 UTC.
+# Costs a second walk of the tree, so it is only measured for --json.
+newest_write() {
+    local t
+    [ "$JSON" = 1 ] && [ "${#MTIME_CMD[@]}" -gt 0 ] || return 0
+    t=$(find -P "$1" -exec "${MTIME_CMD[@]}" {} + 2>/dev/null | awk '$1 > m { m = $1 } END { if (m) print m }')
+    [ -z "$t" ] || os_iso_time "$t"
+}
+artifact_row() { add_row artifact "$1" "$2" '' "$3" "$(newest_write "$3")"; }
 
 # ---------------------------------------------------------------- caches
 # add_cache NAME TOOL BLOCK RUN MEASURE GUARD PATH...
@@ -197,13 +214,13 @@ invoke_caches() {
         if [ -n "${CT_GUARD[i]}" ]; then reason=$("${CT_GUARD[i]}"); fi
 
         if [ -n "${CT_TOOL[i]}" ] && ! have_cmd "${CT_TOOL[i]}"; then
-            add_row cache "$bytes" "skipped (${CT_TOOL[i]} not on PATH)" "$name"
+            add_row cache "$bytes" "skipped (${CT_TOOL[i]} not on PATH)" "$name" ''
         elif [ -n "$busy" ]; then
-            add_row cache "$bytes" "skipped ($busy running)" "$name"
+            add_row cache "$bytes" "skipped ($busy running)" "$name" ''
         elif [ -n "$reason" ]; then
-            add_row cache "$bytes" "skipped ($reason)" "$name"
+            add_row cache "$bytes" "skipped ($reason)" "$name" ''
         elif [ "$APPLY" != 1 ]; then
-            add_row cache "$bytes" 'would clean' "$name"
+            add_row cache "$bytes" 'would clean' "$name" ''
         else
             "${CT_RUN[i]}" >/dev/null 2>&1
             # Report what was really freed, not what we hoped to free.
@@ -214,7 +231,7 @@ invoke_caches() {
             else
                 status=cleaned
             fi
-            add_row cache "$freed" "$status" "$name"
+            add_row cache "$freed" "$status" "$name" ''
         fi
         i=$(( i + 1 ))
     done
@@ -222,7 +239,7 @@ invoke_caches() {
     i=0
     while [ "$i" -lt "$WT_N" ]; do
         bytes=$(dir_bytes "${WT_PATH[i]}")
-        [ "$bytes" -gt 0 ] && add_row watch "$bytes" 'report only' "${WT_LABEL[i]}  (${WT_PATH[i]})"
+        [ "$bytes" -gt 0 ] && add_row watch "$bytes" 'report only' "${WT_LABEL[i]}" "${WT_PATH[i]}"
         i=$(( i + 1 ))
     done
 }
@@ -388,22 +405,22 @@ invoke_artifacts() {
             is_excluded "$path" && continue
             bytes=$(dir_bytes "$path")
             if written_within_days "$path" "$OLDER_THAN_DAYS"; then
-                add_row artifact "$bytes" "kept (used < $OLDER_THAN_DAYS d ago)" "$path"; continue
+                artifact_row "$bytes" "kept (used < $OLDER_THAN_DAYS d ago)" "$path"; continue
             fi
             if [ "$NO_GIT_CHECK" != 1 ]; then
                 # 0 = ignored, 1 = tracked / not ignored, 128 = not a git repo
                 git -C "${path%/*}" check-ignore -q -- "${path##*/}" >/dev/null 2>&1 </dev/null
                 g=$?
-                if [ "$g" = 1 ]; then add_row artifact "$bytes" 'kept (tracked by git)' "$path"; continue; fi
-                if [ "$g" != 0 ]; then add_row artifact "$bytes" 'kept (not a git repo; --no-git-check)' "$path"; continue; fi
+                if [ "$g" = 1 ]; then artifact_row "$bytes" 'kept (tracked by git)' "$path"; continue; fi
+                if [ "$g" != 0 ]; then artifact_row "$bytes" 'kept (not a git repo; --no-git-check)' "$path"; continue; fi
             fi
-            if [ "$APPLY" != 1 ]; then add_row artifact "$bytes" 'would delete' "$path"; continue; fi
+            if [ "$APPLY" != 1 ]; then artifact_row "$bytes" 'would delete' "$path"; continue; fi
             if remove_dir_safe "$path"; then
-                add_row artifact "$bytes" deleted "$path"
+                artifact_row "$bytes" deleted "$path"
             else
                 left=$(dir_bytes "$path")
                 g=$(( bytes - left )); [ "$g" -ge 0 ] || g=0
-                add_row artifact "$g" "partly deleted ($(fmt_size "$left") in use)" "$path"
+                artifact_row "$g" "partly deleted ($(fmt_size "$left") in use)" "$path"
             fi
         done 3< <(find_artifacts "$root")
     done
@@ -442,7 +459,7 @@ default_branch() {
 classify_worktree() {
     local gd=$1 def=$2 wt=$3 head=$4 branch=$5 prunable=$6 locked=$7 reasons='' ct age
     if [ -n "$prunable" ]; then
-        add_row worktree 0 'report only: folder is gone (git worktree prune)' "$wt"; return
+        add_row worktree 0 'report only: folder is gone (git worktree prune)' '' "$wt"; return
     fi
     [ -d "$wt" ] || return 0
     if [ -n "$def" ] && [ -n "$head" ] && [ "$branch" != "${def#origin/}" ] &&
@@ -459,7 +476,7 @@ classify_worktree() {
         reasons="$reasons; HAS UNCOMMITTED CHANGES"
     fi
     [ -z "$locked" ] || reasons="$reasons; locked"
-    add_row worktree "$(dir_bytes "$wt")" "report only: $reasons" "$wt"
+    add_row worktree "$(dir_bytes "$wt")" "report only: $reasons" '' "$wt"
 }
 
 invoke_worktrees() {
@@ -502,7 +519,8 @@ print_report() {
             if (b >= 1048576) return sprintf("%.0f MB", b / 1048576)
             return sprintf("%.0f KB", b / 1024)
         }
-        { kind[NR] = $1; sz[NR] = size($2); st[NR] = $3; item[NR] = $4
+        { kind[NR] = $1; sz[NR] = size($2); st[NR] = $3
+          item[NR] = ($4 != "" && $5 != "") ? $4 "  (" $5 ")" : ($4 != "" ? $4 : $5)
           if (length($3) > w) w = length($3) }
         END {
             if (NR == 0) exit
@@ -516,6 +534,39 @@ print_report() {
         note 'Worktrees are only reported. Remove one with: git worktree remove <path> (it refuses when there are uncommitted changes).'
         echo
     fi
+}
+
+# print_json FREE_BEFORE FREE_AFTER: the whole report as one JSON object.
+print_json() {
+    awk -F "$TAB" -v ver="$BB_VERSION" -v os="$OS_NAME" -v mode="$MODE" -v apply="$APPLY" \
+        -v free0="$1" -v free1="$2" -v reclaim="$(actionable_bytes)" '
+        # Escape by copying char by char: backslashes in a gsub replacement behave
+        # differently in BSD awk, gawk and mawk.
+        function js(v,    o, i, c) {
+            o = ""
+            for (i = 1; i <= length(v); i++) {
+                c = substr(v, i, 1)
+                if (c == "\\") o = o "\\\\"
+                else if (c == "\"") o = o "\\\""
+                else if (c == "\t") o = o "\\t"
+                else if (c == "\r") o = o "\\r"
+                else o = o c
+            }
+            return "\"" o "\""
+        }
+        function opt(v) { return v == "" ? "null" : js(v) }
+        function num(v) { return v ~ /^[0-9]+$/ ? v : "null" }
+        { row[NR] = sprintf("    {\"kind\": %s, \"name\": %s, \"path\": %s, \"bytes\": %s, \"status\": %s, \"newestWrite\": %s}",
+                            js($1), opt($4), opt($5), num($2), js($3), opt($6)) }
+        END {
+            print "{"
+            printf "  \"version\": %s,\n  \"os\": %s,\n  \"mode\": %s,\n  \"apply\": %s,\n", js(ver), js(os), js(mode), (apply == 1 ? "true" : "false")
+            printf "  \"freeBytes\": %s,\n  \"freeBytesAfter\": %s,\n  \"reclaimableBytes\": %s,\n", num(free0), num(free1), num(reclaim)
+            printf "  \"items\": ["
+            for (i = 1; i <= NR; i++) printf "%s\n%s", (i > 1 ? "," : ""), row[i]
+            print (NR ? "\n  ]" : "]")
+            print "}"
+        }' "$ROWS_FILE"
 }
 
 actionable_bytes() {
@@ -540,6 +591,7 @@ Usage: buildbroom.sh [options]
   --no-git-check                also clean artifacts in folders that are not git repos
   --deep                        also clear big caches that take long to download again
   --apply                       actually delete (default: dry run, nothing is deleted)
+  --json                        print the report as JSON on stdout (progress goes to stderr)
   --config FILE                 config file (default: ~/.config/buildbroom/config.json)
   -h, --help                    show this help
   --version                     show the version
@@ -589,6 +641,7 @@ parse_args() {
             --no-git-check) NO_GIT_CHECK=1 ;;
             --deep) DEEP=1 ;;
             --apply) APPLY=1 ;;
+            --json) JSON=1 ;;
             -h|--help) usage; exit 0 ;;
             --version) echo "buildbroom $BB_VERSION"; exit 0 ;;
             *) die "unknown option: $1 (see --help)" ;;
@@ -623,6 +676,8 @@ EOF
 bb_main() {
     local roots_note='' free0 free1 gained
     parse_args "$@"
+    # With --json, stdout carries only the JSON; every other line goes to stderr.
+    if [ "$JSON" = 1 ]; then exec 4>&1 1>&2; fi
     [ "$(id -u)" -ne 0 ] || die "refusing to run as root; run it as the user whose caches you want to clean"
     load_config
 
@@ -656,9 +711,10 @@ bb_main() {
         fi
     fi
 
-    print_report
+    free1=''
+    [ "$APPLY" != 1 ] || free1=$(free_bytes)
+    if [ "$JSON" = 1 ]; then print_json "$free0" "$free1" >&4; else print_report; fi
     if [ "$APPLY" = 1 ]; then
-        free1=$(free_bytes)
         gained=$(( ${free1:-0} - ${free0:-0} )); [ "$gained" -ge 0 ] || gained=0
         printf '%sDone. Free: %s -> %s  (+%s)%s\n' "$C_OK" "$(fmt_size "${free0:-0}")" "$(fmt_size "${free1:-0}")" "$(fmt_size "$gained")" "$C_OFF"
     else

@@ -182,6 +182,22 @@ check 'apply does not remove a worktree'   there "$w/merged/a.txt"
 check 'apply keeps uncommitted work'       there "$w/old/wip.txt"
 check 'apply does not prune git metadata'  grep -q 'prunable' <<<"$(git -C "$w/main" worktree list --porcelain)"
 
+printf '\n== --json prints only valid JSON on stdout\n'
+j="$F/json"; odd="$j/we\"ird\\dir"
+mkdir -p "$odd/node_modules/x"; echo '{}' > "$odd/package.json"; set_old "$odd/node_modules"
+"$bb_bash" "$script" --json --mode artifacts --roots "$j" --no-git-check --config "$F/none.json" \
+    >"$F/out.json" 2>"$F/err.txt"; rc=$?
+jget() { plutil -extract "$1" raw -o - "$F/out.json" 2>/dev/null; }
+check 'exit code 0'                        [ "$rc" = 0 ]
+check 'stdout is valid JSON'               plutil -convert json -o /dev/null "$F/out.json"
+check 'progress went to stderr'            grep -q 'DRY RUN' "$F/err.txt"
+check 'no table on stdout'                 not_in 'Reclaimable:' "$(cat "$F/out.json")"
+check 'apply is false in a dry run'        [ "$(jget apply)" = false ]
+check 'quote and backslash survive'        [ "$(jget items.0.path)" = "$odd/node_modules" ]
+check 'artifact status'                    [ "$(jget items.0.status)" = 'would delete' ]
+check 'newestWrite is ISO 8601 UTC'        grep -qE '^2020-01-0[12]T[0-9:]{8}Z$|^2019-12-31T[0-9:]{8}Z$' <<<"$(jget items.0.newestWrite)"
+check 'nothing deleted by --json'          there "$odd/node_modules/x"
+
 printf '\n== unknown options are rejected\n'
 # shellcheck disable=SC2329
 rejects() { ! "$bb_bash" "$script" "$@" >/dev/null 2>&1; }

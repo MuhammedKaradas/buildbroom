@@ -155,7 +155,27 @@ Kullanımdaki worktree'ler listelenmez.
 | `-NoGitCheck` | `--no-git-check` | kapalı | git reposu olmayan klasörlerdeki kalıntıları da temizle |
 | `-Deep` | `--deep` | kapalı | yeniden indirmesi uzun süren büyük önbellekleri de sil (bkz. yukarısı) |
 | `-Apply` | `--apply` | kapalı | gerçekten sil |
+| | `--json` | kapalı | raporu JSON olarak bas (bkz. aşağısı) |
 | `-Config` | `--config` | aşağıya bak | okunacak config dosyası |
+
+## JSON çıktısı (macOS)
+
+`--json`, raporun tamamını stdout'a tek bir JSON nesnesi olarak basar. Script'ler, CI ya da zamanlanmış
+çalıştırmalar için. İlerleme satırları stderr'e gider, yani `unix/buildbroom.sh --json --roots ~/code > report.json`
+temiz bir dosya üretir. Atlanan ve korunanlar dahil her satır yer alır. `name` önbellekler ve sadece raporlanan
+öğeler için, `path` klasörler için, `newestWrite` (içerideki en yeni yazma, UTC) kalıntılar için doludur.
+`freeBytesAfter` sadece `--apply` ile dolar.
+
+```json
+{
+  "version": "0.1.0", "os": "macOS", "mode": "artifacts", "apply": false,
+  "freeBytes": 201265348608, "freeBytesAfter": null, "reclaimableBytes": 1880000000,
+  "items": [
+    {"kind": "artifact", "name": null, "path": "/Users/me/code/app/node_modules", "bytes": 1880000000,
+     "status": "would delete", "newestWrite": "2026-10-02T08:14:00Z"}
+  ]
+}
+```
 
 ## Config dosyası
 

@@ -9,6 +9,10 @@ LIB="$HOME/Library"
 FIND_PATH_TEST=-ipath
 path_key() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
+# BSD stat: mtime (epoch) of the link itself, never its target. BSD date formats an epoch with -r.
+MTIME_CMD=(stat -f %m)
+os_iso_time() { date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
+
 # Xcode re-creates device support files when a device with that OS version is connected again.
 DEVICE_SUPPORT_DAYS=90
 

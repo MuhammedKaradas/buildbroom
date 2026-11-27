@@ -16,7 +16,7 @@
 ## v0.3: shared rule set
 - Move the cache and artifact rules into one `rules.json`, read by both scripts,
   so adding a new tool is a one-line change
-- `--json` output for scripting / CI
+- `--json` output for scripting / CI (macOS done, #3; Windows still to do)
 
 ## v0.4: single cross-platform command
 Options, to be decided:
