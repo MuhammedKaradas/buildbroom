@@ -132,3 +132,102 @@ os_register_caches() {
     add_watch 'Android SDK'                                    "$LIB/Android/sdk"
     add_watch 'Android emulators (AVD)'                        "$HOME/.android/avd"
 }
+
+# ---------------------------------------------------------------- scheduled runs (launchd)
+# A per-user launch agent, weekly on Monday 10:00. launchd runs a missed slot when the Mac
+# wakes up, so a sleeping laptop is fine. Output is appended to ~/Library/Logs/buildbroom.log.
+SCHED_LABEL=local.buildbroom
+
+xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+# Folders macOS protects (TCC): a background job reading them needs Full Disk Access for bash.
+under_protected() {
+    case $(path_key "$1") in
+        "$(path_key "$HOME/Desktop")"|"$(path_key "$HOME/Desktop")"/*) return 0 ;;
+        "$(path_key "$HOME/Documents")"|"$(path_key "$HOME/Documents")"/*) return 0 ;;
+        "$(path_key "$HOME/Downloads")"|"$(path_key "$HOME/Downloads")"/*) return 0 ;;
+        "$(path_key "$LIB/Mobile Documents")"|"$(path_key "$LIB/Mobile Documents")"/*) return 0 ;;
+    esac
+    return 1
+}
+
+os_schedule_install() {
+    local dir="$LIB/LaunchAgents" logs="$LIB/Logs" plist a prev=''
+    plist="$dir/$SCHED_LABEL.plist"
+    mkdir -p "$dir" "$logs" || die "cannot create $dir"
+    {
+        cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$SCHED_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$(xml_escape "$BB_DIR/buildbroom.sh")</string>
+PLIST
+        for a in "$@"; do printf '    <string>%s</string>\n' "$(xml_escape "$a")"; done
+        cat <<PLIST
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$(xml_escape "$PATH")</string>
+    <key>NO_COLOR</key>
+    <string>1</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>10</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$(xml_escape "$logs/buildbroom.log")</string>
+  <key>StandardErrorPath</key>
+  <string>$(xml_escape "$logs/buildbroom.log")</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+    } > "$plist.tmp" || die "cannot write $plist"
+    if ! plutil -lint -s "$plist.tmp"; then rm -f "$plist.tmp"; die "generated an invalid $plist"; fi
+    mv -f "$plist.tmp" "$plist"
+
+    launchctl bootout "gui/$(id -u)/$SCHED_LABEL" >/dev/null 2>&1
+    launchctl bootstrap "gui/$(id -u)" "$plist" || die "launchctl could not load $plist"
+
+    info "Scheduled weekly (Monday 10:00, or at the next wake-up):"
+    printf '  /bin/bash'; printf ' %q' "$BB_DIR/buildbroom.sh" "$@"; echo
+    echo "  log:    $logs/buildbroom.log"
+    echo "  agent:  $plist"
+    echo "  remove: $BB_DIR/buildbroom.sh --unschedule"
+    if under_protected "$BB_DIR"; then
+        note "buildbroom lives in a folder macOS protects ($BB_DIR): the scheduled run cannot read it. Move the repo or give /bin/bash Full Disk Access."
+    fi
+    for a in "$@"; do
+        if [ "$prev" = --roots ] && under_protected "$a"; then
+            note "Root $a is in a folder macOS protects: the scheduled run needs Full Disk Access for /bin/bash to scan it."
+        fi
+        prev=$a
+    done
+    echo "The script path is stored in the agent: run --schedule again if you move the repo."
+}
+
+os_schedule_remove() {
+    local plist="$LIB/LaunchAgents/$SCHED_LABEL.plist"
+    launchctl bootout "gui/$(id -u)/$SCHED_LABEL" >/dev/null 2>&1
+    if [ -e "$plist" ]; then
+        rm -f "$plist" && info "Removed the scheduled run ($plist)."
+    else
+        info "No scheduled run found."
+    fi
+}

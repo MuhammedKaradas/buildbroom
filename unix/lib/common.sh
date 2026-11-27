@@ -26,6 +26,10 @@ SET_ROOTS=0
 SET_OLDER=0
 SET_EXCLUDE=0
 SET_STALE=0
+SET_MODE=0
+SET_DEPTH=0
+SET_CONFIG=0
+SCHEDULE=''        # install | remove
 
 # ---------------------------------------------------------------- OS hooks (defaults)
 OS_NAME=unix
@@ -38,6 +42,8 @@ os_config_list() { return 1; }    # FILE KEY -> print one element per line
 os_config_valid() { return 1; }   # FILE -> 0 when the file can be read
 MTIME_CMD=()                    # command printing the mtime (epoch) of each argument, e.g. stat -f %m
 os_iso_time() { printf '%s' "$1"; }  # EPOCH -> ISO 8601 UTC
+os_schedule_install() { die "--schedule is not supported on $OS_NAME yet"; }  # ARGS... of the scheduled run
+os_schedule_remove() { die "--unschedule is not supported on $OS_NAME yet"; }
 
 # ---------------------------------------------------------------- output helpers
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -592,6 +598,9 @@ Usage: buildbroom.sh [options]
   --deep                        also clear big caches that take long to download again
   --apply                       actually delete (default: dry run, nothing is deleted)
   --json                        print the report as JSON on stdout (progress goes to stderr)
+  --schedule                    run weekly with the other options given here plus --apply
+                                (default --mode caches; artifacts only when asked for), logging to a file
+  --unschedule                  remove the weekly run
   --config FILE                 config file (default: ~/.config/buildbroom/config.json)
   -h, --help                    show this help
   --version                     show the version
@@ -631,17 +640,20 @@ parse_args() {
         esac
         case $opt in
             --mode)
+                SET_MODE=1
                 case $val in all|caches|artifacts|worktrees) MODE=$val ;; *) die "--mode must be all, caches, artifacts or worktrees" ;; esac ;;
             --roots|--root) add_roots "$val"; SET_ROOTS=1 ;;
             --older-than-days) need_uint "$opt" "$val"; OLDER_THAN_DAYS=$val; SET_OLDER=1 ;;
-            --max-depth) need_uint "$opt" "$val"; MAX_DEPTH=$val ;;
+            --max-depth) need_uint "$opt" "$val"; MAX_DEPTH=$val; SET_DEPTH=1 ;;
             --stale-days) need_uint "$opt" "$val"; STALE_DAYS=$val; SET_STALE=1 ;;
             --exclude) EXCLUDE+=("$val"); SET_EXCLUDE=1 ;;
-            --config) CONFIG=$val ;;
+            --config) CONFIG=$val; SET_CONFIG=1 ;;
             --no-git-check) NO_GIT_CHECK=1 ;;
             --deep) DEEP=1 ;;
             --apply) APPLY=1 ;;
             --json) JSON=1 ;;
+            --schedule) SCHEDULE=install ;;
+            --unschedule) SCHEDULE=remove ;;
             -h|--help) usage; exit 0 ;;
             --version) echo "buildbroom $BB_VERSION"; exit 0 ;;
             *) die "unknown option: $1 (see --help)" ;;
@@ -672,6 +684,43 @@ EOF
     fi
 }
 
+# ---------------------------------------------------------------- scheduled runs
+# The scheduled run gets every option spelled out: a scheduler starts it in / with no
+# terminal, so nothing may depend on the current folder. Artifacts stay opt-in: the default
+# is --mode caches, and any mode that scans needs roots, resolved to absolute paths now.
+SCHED_ARGS=()
+schedule_args() {
+    local mode=caches r p
+    [ "$SET_MODE" = 0 ] || mode=$MODE
+    SCHED_ARGS=(--mode "$mode")
+    if [ "$mode" != caches ]; then
+        prepare_roots
+        [ "${#SCAN_ROOTS[@]}" -gt 0 ] ||
+            die "--schedule with --mode $mode needs --roots (or roots in the config file): a scheduled run has no current folder"
+        for r in "${SCAN_ROOTS[@]}"; do SCHED_ARGS+=(--roots "$r"); done
+    fi
+    [ "$SET_OLDER" = 0 ] || SCHED_ARGS+=(--older-than-days "$OLDER_THAN_DAYS")
+    [ "$SET_DEPTH" = 0 ] || SCHED_ARGS+=(--max-depth "$MAX_DEPTH")
+    [ "$SET_STALE" = 0 ] || SCHED_ARGS+=(--stale-days "$STALE_DAYS")
+    if [ "$SET_EXCLUDE" = 1 ]; then for p in "${EXCLUDE[@]}"; do SCHED_ARGS+=(--exclude "$p"); done; fi
+    [ "$NO_GIT_CHECK" = 0 ] || SCHED_ARGS+=(--no-git-check)
+    [ "$DEEP" = 0 ] || SCHED_ARGS+=(--deep)
+    if [ "$SET_CONFIG" = 1 ]; then
+        p=$(expand_tilde "$CONFIG")
+        case $p in /*) ;; *) p="$(pwd -P)/$p" ;; esac
+        SCHED_ARGS+=(--config "$p")
+    fi
+    SCHED_ARGS+=(--apply)
+}
+
+schedule() {
+    ROWS_FILE=/dev/null
+    prepare_never_scan
+    if [ "$SCHEDULE" = remove ]; then os_schedule_remove; return; fi
+    schedule_args
+    os_schedule_install "${SCHED_ARGS[@]}"
+}
+
 # ---------------------------------------------------------------- main
 bb_main() {
     local roots_note='' free0 free1 gained
@@ -680,6 +729,7 @@ bb_main() {
     if [ "$JSON" = 1 ]; then exec 4>&1 1>&2; fi
     [ "$(id -u)" -ne 0 ] || die "refusing to run as root; run it as the user whose caches you want to clean"
     load_config
+    if [ -n "$SCHEDULE" ]; then schedule; exit $?; fi
 
     # No roots given or configured: an explicit --mode artifacts scans the current folder;
     # the default all mode does not, so running it from your home folder never scans everything.

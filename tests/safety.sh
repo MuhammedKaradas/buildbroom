@@ -198,6 +198,40 @@ check 'artifact status'                    [ "$(jget items.0.status)" = 'would d
 check 'newestWrite is ISO 8601 UTC'        grep -qE '^2020-01-0[12]T[0-9:]{8}Z$|^2019-12-31T[0-9:]{8}Z$' <<<"$(jget items.0.newestWrite)"
 check 'nothing deleted by --json'          there "$odd/node_modules/x"
 
+printf '\n== --schedule writes a launch agent and runs nothing (fake HOME and launchctl)\n'
+sh_home="$F/shome"; sfake="$F/sfakebin"; calls="$F/launchctl.log"
+mkdir -p "$sh_home" "$sfake" "$F/sched/A&B/proj/node_modules/m"
+printf '#!/bin/sh\necho "$*" >> %s\n' "'$calls'" > "$sfake/launchctl"; chmod +x "$sfake/launchctl"
+echo '{}' > "$F/sched/A&B/proj/package.json"; set_old "$F/sched"
+agent="$sh_home/Library/LaunchAgents/local.buildbroom.plist"
+sbb() { HOME="$sh_home" PATH="$sfake:$PATH" "$bb_bash" "$script" --config "$F/none.json" "$@" 2>&1; }
+sched_args() {   # the scheduled command line, one argument per line
+    local i=0 v
+    while v=$(plutil -extract "ProgramArguments.$i" raw -o - "$agent" 2>/dev/null); do
+        printf '%s\n' "$v"; i=$(( i + 1 ))
+    done
+}
+out=$(sbb --schedule); rc=$?
+check 'schedule exits 0'                   [ "$rc" = 0 ]
+check 'agent is a valid plist'             plutil -lint -s "$agent"
+check 'default is --mode caches'           [ "$(sched_args | sed -n 3,4p | tr '\n' ' ')" = '--mode caches ' ]
+check 'scheduled run always applies'       [ "$(sched_args | tail -n 1)" = '--apply' ]
+check 'no roots in a caches schedule'      not_in '--roots' "$(sched_args)"
+check 'PATH is kept for the agent'         [ "$(plutil -extract EnvironmentVariables.PATH raw -o - "$agent")" = "$sfake:$PATH" ]
+check 'launchctl bootstrap called'         grep -q '^bootstrap gui/' "$calls"
+out=$(sbb --schedule --mode artifacts); rc=$?
+check 'artifacts schedule without roots refused' [ "$rc" != 0 ]
+check 'refusal explains why'               grep -q 'needs --roots' <<<"$out"
+out=$(cd "$F/sched" && sbb --schedule --mode artifacts --roots 'A&B' --no-git-check --older-than-days 0)
+check 'relative root stored as absolute, & escaped' grep -qxF "$F/sched/A&B" <<<"$(sched_args)"
+check 'options kept'                       grep -qx -- '--no-git-check' <<<"$(sched_args)"
+check 'schedule itself deleted nothing'    there "$F/sched/A&B/proj/node_modules/m"
+out=$(sbb --unschedule)
+check 'unschedule removes the agent'       gone "$agent"
+check 'launchctl bootout called'           grep -q '^bootout gui/.*/local.buildbroom$' "$calls"
+out=$(sbb --unschedule)
+check 'unschedule twice is fine'           grep -q 'No scheduled run found' <<<"$out"
+
 printf '\n== unknown options are rejected\n'
 # shellcheck disable=SC2329
 rejects() { ! "$bb_bash" "$script" "$@" >/dev/null 2>&1; }

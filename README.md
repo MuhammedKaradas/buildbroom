@@ -155,6 +155,7 @@ Active worktrees are not listed.
 | `-Deep` | `--deep` | off | also clear big caches that take long to download again (see above) |
 | `-Apply` | `--apply` | off | actually delete |
 | | `--json` | off | print the report as JSON (see below) |
+| | `--schedule` / `--unschedule` | | install or remove the weekly run (see [Running it regularly](#running-it-regularly)) |
 | `-Config` | `--config` | see below | config file to read |
 
 ## JSON output (macOS)
@@ -196,8 +197,25 @@ Command-line options override the config.
 ## Running it regularly
 
 Run it every week or two, read the dry-run report, then repeat with `-Apply`. If you prefer
-to schedule it, use Task Scheduler on Windows, or `cron` / a launchd agent on macOS. Schedule `-Mode caches -Apply` first. Turn on artifact cleanup
+to schedule it, use Task Scheduler on Windows. Schedule `-Mode caches -Apply` first. Turn on artifact cleanup
 only after a few dry runs show it picks the right folders.
+
+On macOS, `--schedule` installs a launch agent that runs every Monday at 10:00 (or at the next wake-up):
+
+```bash
+unix/buildbroom.sh --schedule                                  # caches only, with --apply
+unix/buildbroom.sh --schedule --mode all --roots ~/code       # also artifacts: opt in explicitly
+unix/buildbroom.sh --unschedule                                # remove it
+```
+
+- The scheduled run gets the options you pass plus `--apply`. Without `--mode` it cleans **caches only**.
+- A mode that scans needs `--roots` (or roots in the config file). They are stored as absolute paths, because
+  a scheduled run has no current folder.
+- Output goes to `~/Library/Logs/buildbroom.log`. Your current `PATH` is stored too, so npm, brew and the
+  rest are found.
+- The agent stores the script's path: run `--schedule` again if you move the repo. Folders macOS protects
+  (Desktop, Documents, Downloads, iCloud Drive) need Full Disk Access for `/bin/bash` to be scanned in the
+  background, and buildbroom warns about them.
 
 ## Contributing
 

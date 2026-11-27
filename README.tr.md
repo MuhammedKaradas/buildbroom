@@ -156,6 +156,7 @@ Kullanımdaki worktree'ler listelenmez.
 | `-Deep` | `--deep` | kapalı | yeniden indirmesi uzun süren büyük önbellekleri de sil (bkz. yukarısı) |
 | `-Apply` | `--apply` | kapalı | gerçekten sil |
 | | `--json` | kapalı | raporu JSON olarak bas (bkz. aşağısı) |
+| | `--schedule` / `--unschedule` | | haftalık çalıştırmayı kur veya kaldır (bkz. [Düzenli çalıştırma](#düzenli-çalıştırma)) |
 | `-Config` | `--config` | aşağıya bak | okunacak config dosyası |
 
 ## JSON çıktısı (macOS)
@@ -198,8 +199,25 @@ Komut satırı seçenekleri config'i ezer.
 ## Düzenli çalıştırma
 
 Bir-iki haftada bir çalıştır, kuru çalıştırma raporunu oku, sonra `-Apply` ile tekrarla.
-Zamanlamak istersen Windows'ta Görev Zamanlayıcı'yı, macOS'ta `cron` ya da bir launchd agent'ı kullan. Önce `-Mode caches -Apply`'ı zamanla. Kalıntı
+Zamanlamak istersen Windows'ta Görev Zamanlayıcı'yı kullan. Önce `-Mode caches -Apply`'ı zamanla. Kalıntı
 temizliğini ise ancak birkaç kuru çalıştırma doğru klasörleri seçtiğini gösterdikten sonra aç.
+
+macOS'ta `--schedule`, her pazartesi 10:00'da (ya da Mac'in bir sonraki uyanışında) çalışan bir launch agent kurar:
+
+```bash
+unix/buildbroom.sh --schedule                                  # sadece önbellekler, --apply ile
+unix/buildbroom.sh --schedule --mode all --roots ~/code       # kalıntılar da: açıkça istenmeli
+unix/buildbroom.sh --unschedule                                # kaldır
+```
+
+- Zamanlanmış çalıştırma, verdiğin seçenekleri ve `--apply`'ı alır. `--mode` verilmezse **sadece önbellekleri** temizler.
+- Tarama yapan bir mod `--roots` (ya da config'te kök) ister. Zamanlanmış çalıştırmanın bulunduğu bir klasör
+  olmadığı için kökler mutlak yol olarak saklanır.
+- Çıktı `~/Library/Logs/buildbroom.log` dosyasına yazılır. O anki `PATH` de saklanır, böylece npm, brew ve
+  diğerleri bulunur.
+- Agent script'in yolunu saklar: repoyu taşırsan `--schedule`'ı yeniden çalıştır. macOS'un koruduğu klasörlerin
+  (Masaüstü, Belgeler, İndirilenler, iCloud Drive) arka planda taranması için `/bin/bash`'e Tam Disk Erişimi
+  gerekir. buildbroom bunlar için uyarır.
 
 ## Katkı
 
