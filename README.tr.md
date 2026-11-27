@@ -58,7 +58,7 @@ macOS ile gelen bash 3.2 ile çalışır, başka bir şey gerektirmez. `buildbro
 | NuGet http + plugin önbelleği | `dotnet nuget locals ... --clear`. Visual Studio / Rider açıkken atlanır |
 | Temp | sadece içinde `-TempDays` gündür (varsayılan 3) hiçbir şey yazılmamış üst seviye öğeler |
 | Crash dump'lar | `%LOCALAPPDATA%\CrashDumps` |
-| Docker build önbelleği | `docker builder prune -f`. İmajlara, container'lara ve volume'lere **dokunulmaz** |
+| Docker build önbelleği | `docker builder prune -f`. İmajlara, container'lara ve volume'lere **dokunulmaz**. Boyut, `docker system df`'teki geri kazanılabilir build önbelleğidir |
 
 `-Deep` ile ek olarak NuGet global paketleri ve Gradle wrapper dağıtımları da silinir. Bir sonraki
 build bunları yeniden indirir.

@@ -116,7 +116,7 @@ os_register_caches() {
     add_cache 'SwiftPM cache'                            ''     "$xcode_block"  mac_swiftpm        ''                      ''            "$LIB/Caches/org.swift.swiftpm"
     add_cache 'Homebrew downloads + old versions'        brew   ''              mac_brew           ''                      ''            "$brewcache"
     add_cache 'Docker build cache (images/containers/volumes untouched)' \
-                                                         docker ''              mac_docker         ''                      docker_guard
+                                                         docker ''              mac_docker         docker_build_cache_bytes docker_guard
     if [ "$DEEP" = 1 ]; then
         add_cache '[deep] Go module cache'               go     ''              mac_gomod          ''                      ''            "$gomod"
         add_cache '[deep] Gradle wrapper distributions'  ''     'studio idea'   mac_gradle_wrapper ''                      gradle_guard  "$HOME/.gradle/wrapper/dists"

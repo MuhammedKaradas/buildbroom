@@ -181,8 +181,9 @@ $CacheTargets = @(
         Get-ChildItem -LiteralPath "$LA\CrashDumps" -File -Force -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue }
     }
-    @{ Name = 'Docker build cache (images/containers/volumes untouched)'; Path = $null; Tool = 'docker'; Block = @(); Run = {
-        if (docker info 2>$null) { docker builder prune -f 2>$null | Out-Null } }
+    @{ Name = 'Docker build cache (images/containers/volumes untouched)'; Path = $null; Tool = 'docker'; Block = @();
+       Measure = { Get-DockerBuildCacheBytes }
+       Run = { if (docker info 2>$null) { docker builder prune -f 2>$null | Out-Null } }
     }
 )
 if ($Deep) {
@@ -190,6 +191,24 @@ if ($Deep) {
         Block = @('devenv', 'rider64'); Run = { dotnet nuget locals global-packages --clear | Out-Null } }
     $CacheTargets += @{ Name = '[deep] Gradle wrapper distributions'; Path = "$U\.gradle\wrapper\dists";
         Block = @('studio64', 'idea64'); Run = { [void](Remove-DirSafe "$U\.gradle\wrapper\dists") } }
+}
+
+# Reclaimable Docker build cache in bytes, from `docker system df` (decimal units such as
+# "1.5GB"). 0 when Docker is missing, not running or fails (seen with containerd snapshot
+# issues). Reclaimable, not total: `docker builder prune` keeps cache that is in use.
+function Get-DockerBuildCacheBytes {
+    if (-not (Test-Cmd 'docker')) { return [double]0 }
+    $lines = docker system df --format '{{.Type}}|{{.Reclaimable}}' 2>$null
+    if ($LASTEXITCODE -ne 0) { return [double]0 }
+    foreach ($l in @($lines)) {
+        $parts = "$l".Split('|')
+        if ($parts.Count -lt 2 -or $parts[0] -ne 'Build Cache') { continue }
+        $m = [regex]::Match($parts[1], '^\s*([0-9.]+)\s*([kKMGT]?B)\b')
+        if (-not $m.Success) { return [double]0 }
+        $mult = @{ 'B' = 1; 'KB' = 1e3; 'MB' = 1e6; 'GB' = 1e9; 'TB' = 1e12 }[$m.Groups[2].Value]
+        return [double]::Parse($m.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture) * $mult
+    }
+    return [double]0
 }
 
 # Top-level Temp entries with nothing inside written for -TempDays days.

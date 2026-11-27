@@ -103,6 +103,27 @@ remove_dir_safe() {
     [ ! -e "$p" ] && [ ! -L "$p" ]
 }
 
+# Reclaimable Docker build cache in bytes, from `docker system df` (decimal units such as
+# "1.5GB"). Prints 0 when Docker is missing, not running or fails (seen with containerd
+# snapshot issues). Reclaimable, not total: `docker builder prune` keeps cache in use.
+docker_build_cache_bytes() {
+    have_cmd docker || { echo 0; return; }
+    docker system df --format '{{.Type}}|{{.Reclaimable}}' 2>/dev/null </dev/null | awk -F '|' '
+        $1 == "Build Cache" {
+            v = $2; sub(/^[ \t]+/, "", v); sub(/[ (].*$/, "", v)
+            n = v; sub(/[A-Za-z]+$/, "", n); u = substr(v, length(n) + 1)
+            m = 0
+            if (u == "B") m = 1
+            else if (u == "kB" || u == "KB") m = 1e3
+            else if (u == "MB") m = 1e6
+            else if (u == "GB") m = 1e9
+            else if (u == "TB") m = 1e12
+            if (n ~ /^[0-9.]+$/) bytes = n * m
+            found = 1
+        }
+        END { printf "%.0f\n", found ? bytes : 0 }'
+}
+
 # Print the names (from $@) that have a running process with exactly that name.
 running_of() {
     local n out=

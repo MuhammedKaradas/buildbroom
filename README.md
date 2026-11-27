@@ -57,7 +57,7 @@ somewhere on your `PATH`: `ln -s "$PWD/unix/buildbroom.sh" /usr/local/bin/buildb
 | NuGet http + plugins cache | `dotnet nuget locals ... --clear`; skipped while Visual Studio / Rider is open |
 | Temp | only top-level entries with nothing inside written for `-TempDays` days (default 3) |
 | Crash dumps | `%LOCALAPPDATA%\CrashDumps` |
-| Docker build cache | `docker builder prune -f`. Images, containers and volumes are **not** touched |
+| Docker build cache | `docker builder prune -f`. Images, containers and volumes are **not** touched. The size is the reclaimable build cache from `docker system df` |
 
 With `-Deep`: NuGet global packages and Gradle wrapper distributions as well. The next build
 downloads them again.

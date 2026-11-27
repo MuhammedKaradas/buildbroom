@@ -27,6 +27,8 @@ check() {
 gone() { [ ! -e "$1" ] && [ ! -L "$1" ]; }
 # shellcheck disable=SC2329
 there() { [ -e "$1" ] || [ -L "$1" ]; }
+# shellcheck disable=SC2329
+not_in() { ! grep -qF -- "$1" <<<"$2"; }
 # Set everything under a path (symlinks excluded, so they stay fresh) to an old date.
 set_old() { find -P "$1" ! -type l -exec touch -t 202001010000 {} +; }
 bb() {
@@ -122,6 +124,38 @@ mkdir -p "$F/cfgroot"
 printf '{ "roots": ["%s"], "olderThanDays": 3 }\n' "$F/cfgroot" > "$F/config.json"
 out=$(cd / && "$bb_bash" "$script" --mode artifacts --config "$F/config.json" 2>&1)
 check 'config root scanned'                grep -qF "Scanning $F/cfgroot" <<<"$out"
+
+printf '\n== Docker build cache is measured from docker system df (fake docker, isolated HOME and PATH)\n'
+# Only the fake docker and the base system tools are on PATH, and HOME is a fixture, so
+# --apply in caches mode cannot touch any real cache on this machine.
+fake="$F/fakebin"; state="$F/docker-state"
+mkdir -p "$fake" "$state" "$F/dhome"
+cat > "$fake/docker" <<'EOF'
+#!/bin/sh
+case "$1 $2" in
+    "info "*) exit 0 ;;
+    "system df")
+        [ -f "$BB_DOCKER_STATE/fail" ] && { echo 'Error: failed to get snapshot usage' >&2; exit 1; }
+        r=1.5GB; [ -f "$BB_DOCKER_STATE/pruned" ] && r=0B
+        printf 'Images|1.2GB (50%%)\nContainers|0B (0%%)\nLocal Volumes|3GB (100%%)\nBuild Cache|%s\n' "$r" ;;
+    "builder prune") touch "$BB_DOCKER_STATE/pruned" ;;
+esac
+EOF
+chmod +x "$fake/docker"
+dbb() {
+    HOME="$F/dhome" PATH="$fake:/usr/bin:/bin:/usr/sbin:/sbin" BB_DOCKER_STATE="$state" \
+        "$bb_bash" "$script" --mode caches --config "$F/none.json" "$@" 2>&1
+}
+out=$(dbb)
+check 'dry run reports 1.5 GB build cache' grep -qE '1\.40 GB +would clean +Docker build cache' <<<"$out"
+check 'dry run does not prune'             gone "$state/pruned"
+out=$(dbb --apply)
+check 'apply prunes the build cache'       there "$state/pruned"
+check 'apply reports what was freed'       grep -qE '1\.40 GB +cleaned +Docker build cache' <<<"$out"
+rm -f "$state/pruned"; touch "$state/fail"
+out=$(dbb); rc=$?
+check 'a failing docker system df is not fatal' [ "$rc" = 0 ]
+check 'no Docker row when df fails'        not_in 'Docker build cache' "$out"
 
 printf '\n== unknown options are rejected\n'
 # shellcheck disable=SC2329
