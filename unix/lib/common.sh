@@ -15,6 +15,7 @@ MODE=all
 ROOTS=()
 OLDER_THAN_DAYS=7
 MAX_DEPTH=8
+STALE_DAYS=30
 EXCLUDE=()
 NO_GIT_CHECK=0
 DEEP=0
@@ -23,6 +24,7 @@ CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/buildbroom/config.json"
 SET_ROOTS=0
 SET_OLDER=0
 SET_EXCLUDE=0
+SET_STALE=0
 
 # ---------------------------------------------------------------- OS hooks (defaults)
 OS_NAME=unix
@@ -292,6 +294,21 @@ is_never_scan() {
 
 glob_escape() { printf '%s' "$1" | sed 's/[][*?\\]/\\&/g'; }
 
+# find arguments that prune every never-scan path: ( -path A -o -path B ) -prune -o
+NS_ARGS=()
+never_scan_args() {
+    local n first=1
+    NS_ARGS=()
+    [ "${#NEVER_SCAN[@]}" -gt 0 ] || return 0
+    NS_ARGS+=('(')
+    for n in "${NEVER_SCAN[@]}"; do
+        [ "$first" = 1 ] || NS_ARGS+=(-o)
+        NS_ARGS+=("$FIND_PATH_TEST" "$(glob_escape "$n")")
+        first=0
+    done
+    NS_ARGS+=(')' -prune -o)
+}
+
 # Shell snippet run by find for each folder whose name is on the rule list:
 # exits 0 when a matching marker sits next to it.
 marker_script() {
@@ -319,16 +336,8 @@ exit 1'
 # names are pruned, symlinks are never followed (-P) and never match -type d.
 find_artifacts() {
     local root=$1 args=() n rule first
-    if [ "${#NEVER_SCAN[@]}" -gt 0 ]; then
-        args+=('(')
-        first=1
-        for n in "${NEVER_SCAN[@]}"; do
-            [ "$first" = 1 ] || args+=(-o)
-            args+=("$FIND_PATH_TEST" "$(glob_escape "$n")")
-            first=0
-        done
-        args+=(')' -prune -o)
-    fi
+    never_scan_args
+    args=(${NS_ARGS[@]+"${NS_ARGS[@]}"})
     args+=(-type d '(')
     first=1
     for rule in "${ARTIFACT_RULES[@]}"; do
@@ -357,13 +366,23 @@ is_excluded() {
     return 1
 }
 
-invoke_artifacts() {
-    local root path bytes g left
-    for root in "${ROOTS[@]}"; do
+# Physical paths of the usable roots, with a warning for each one that is skipped.
+SCAN_ROOTS=()
+prepare_roots() {
+    local root
+    SCAN_ROOTS=()
+    for root in ${ROOTS[@]+"${ROOTS[@]}"}; do
         root=$(expand_tilde "$root")
         if [ ! -d "$root" ]; then warn "Root not found: $root"; continue; fi
         root=$(real_dir "$root"); [ "$root" = / ] || root=${root%/}
         if is_never_scan "$root"; then warn "Root is a tool/system folder, skipped: $root"; continue; fi
+        SCAN_ROOTS+=("$root")
+    done
+}
+
+invoke_artifacts() {
+    local root path bytes g left
+    for root in ${SCAN_ROOTS[@]+"${SCAN_ROOTS[@]}"}; do
         dim "Scanning $root ..."
         while IFS= read -r -d '' path <&3; do
             is_excluded "$path" && continue
@@ -390,11 +409,94 @@ invoke_artifacts() {
     done
 }
 
+# ---------------------------------------------------------------- worktrees (report only)
+# Linked git worktrees that look abandoned: the folder is gone (prunable), the branch is
+# already merged into the default branch, or the last commit is older than --stale-days.
+# Nothing is removed: removing a worktree can lose uncommitted work.
+
+# Common git dirs (one per line, unique) of every repo with a .git under the roots.
+find_git_common_dirs() {
+    local root g
+    never_scan_args
+    for root in ${SCAN_ROOTS[@]+"${SCAN_ROOTS[@]}"}; do
+        find -P "$root" -maxdepth "$MAX_DEPTH" ${NS_ARGS[@]+"${NS_ARGS[@]}"} \
+            -type d -name node_modules -prune -o -name .git -print -prune 2>/dev/null
+    done | while IFS= read -r g; do
+        git -C "${g%/*}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null </dev/null
+    done | sort -u
+}
+
+# Default branch to compare against: origin/HEAD (e.g. origin/main), else local main or master.
+default_branch() {
+    local gd=$1 b
+    if b=$(git --git-dir="$gd" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null); then
+        printf '%s' "$b"; return 0
+    fi
+    for b in main master; do
+        if git --git-dir="$gd" show-ref -q --verify "refs/heads/$b" 2>/dev/null; then printf '%s' "$b"; return 0; fi
+    done
+    return 1
+}
+
+# classify_worktree GITDIR DEFAULT PATH HEAD BRANCH PRUNABLE LOCKED
+classify_worktree() {
+    local gd=$1 def=$2 wt=$3 head=$4 branch=$5 prunable=$6 locked=$7 reasons='' ct age
+    if [ -n "$prunable" ]; then
+        add_row worktree 0 'report only: folder is gone (git worktree prune)' "$wt"; return
+    fi
+    [ -d "$wt" ] || return 0
+    if [ -n "$def" ] && [ -n "$head" ] && [ "$branch" != "${def#origin/}" ] &&
+        git --git-dir="$gd" merge-base --is-ancestor "$head" "$def" 2>/dev/null; then
+        reasons="merged into $def"
+    fi
+    ct=$(git -C "$wt" log -1 --format=%ct 2>/dev/null </dev/null)
+    if [ -n "$ct" ]; then
+        age=$(( ( $(date +%s) - ct ) / 86400 ))
+        [ "$age" -lt "$STALE_DAYS" ] || reasons="${reasons:+$reasons, }last commit $age d ago"
+    fi
+    [ -n "$reasons" ] || return 0          # in use: not reported
+    if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null </dev/null | head -n 1)" ]; then
+        reasons="$reasons; HAS UNCOMMITTED CHANGES"
+    fi
+    [ -z "$locked" ] || reasons="$reasons; locked"
+    add_row worktree "$(dir_bytes "$wt")" "report only: $reasons" "$wt"
+}
+
+invoke_worktrees() {
+    local gd def line wt head branch prunable locked n
+    while IFS= read -r gd; do
+        [ -n "$gd" ] || continue
+        def=$(default_branch "$gd") || def=''
+        n=0; wt=''
+        # Porcelain blocks separated by empty lines; the first block is the main worktree.
+        while IFS= read -r line; do
+            case $line in
+                "worktree "*) wt=${line#worktree }; head=''; branch=''; prunable=''; locked='' ;;
+                "HEAD "*) head=${line#HEAD } ;;
+                "branch "*) branch=${line#branch refs/heads/} ;;
+                prunable|"prunable "*) prunable=1 ;;
+                locked|"locked "*) locked=1 ;;
+                '')
+                    if [ -n "$wt" ]; then
+                        n=$(( n + 1 ))
+                        [ "$n" = 1 ] || classify_worktree "$gd" "$def" "$wt" "$head" "$branch" "$prunable" "$locked"
+                    fi
+                    wt='' ;;
+            esac
+        done <<EOF
+$(git --git-dir="$gd" worktree list --porcelain 2>/dev/null </dev/null)
+
+EOF
+    done <<EOF
+$(find_git_common_dirs)
+EOF
+}
+
 # ---------------------------------------------------------------- report
 print_report() {
     [ -s "$ROWS_FILE" ] || return 0
     echo
-    awk -F "$TAB" '$2 > 0' "$ROWS_FILE" | sort -t "$TAB" -k1,1 -k2,2nr | awk -F "$TAB" '
+    awk -F "$TAB" '$2 > 0 || $1 == "worktree"' "$ROWS_FILE" | sort -t "$TAB" -k1,1 -k2,2nr | awk -F "$TAB" '
         function size(b) {
             if (b >= 1073741824) return sprintf("%.2f GB", b / 1073741824)
             if (b >= 1048576) return sprintf("%.0f MB", b / 1048576)
@@ -410,6 +512,10 @@ print_report() {
             for (i = 1; i <= NR; i++) printf "%-9s %10s  %-" w "s  %s\n", kind[i], sz[i], st[i], item[i]
         }'
     echo
+    if grep -q "^worktree$TAB" "$ROWS_FILE"; then
+        note 'Worktrees are only reported. Remove one with: git worktree remove <path> (it refuses when there are uncommitted changes).'
+        echo
+    fi
 }
 
 actionable_bytes() {
@@ -423,10 +529,13 @@ buildbroom $BB_VERSION - safely reclaim disk space eaten by developer caches and
 
 Usage: buildbroom.sh [options]
 
-  --mode all|caches|artifacts   what to clean (default: all)
+  --mode all|caches|artifacts|worktrees
+                                what to clean or report (default: all; artifacts and all
+                                also report stale git worktrees, worktrees reports only them)
   --roots DIR[,DIR...]          folders to scan for artifacts (repeatable; default: config file)
   --older-than-days N           keep artifacts changed within N days (default: 7)
   --max-depth N                 how deep to scan under each root (default: 8)
+  --stale-days N                report worktrees whose last commit is older (default: 30)
   --exclude PATTERN             wildcard path to skip, e.g. '*/keep-me/*' (repeatable)
   --no-git-check                also clean artifacts in folders that are not git repos
   --deep                        also clear big caches that take long to download again
@@ -461,7 +570,7 @@ parse_args() {
             *) opt=$1; val=; has_val=0 ;;
         esac
         case $opt in
-            --mode|--roots|--root|--older-than-days|--max-depth|--exclude|--config)
+            --mode|--roots|--root|--older-than-days|--max-depth|--stale-days|--exclude|--config)
                 if [ "$has_val" = 0 ]; then
                     [ $# -ge 2 ] || die "$opt needs a value"
                     val=$2; shift
@@ -470,10 +579,11 @@ parse_args() {
         esac
         case $opt in
             --mode)
-                case $val in all|caches|artifacts) MODE=$val ;; *) die "--mode must be all, caches or artifacts" ;; esac ;;
+                case $val in all|caches|artifacts|worktrees) MODE=$val ;; *) die "--mode must be all, caches, artifacts or worktrees" ;; esac ;;
             --roots|--root) add_roots "$val"; SET_ROOTS=1 ;;
             --older-than-days) need_uint "$opt" "$val"; OLDER_THAN_DAYS=$val; SET_OLDER=1 ;;
             --max-depth) need_uint "$opt" "$val"; MAX_DEPTH=$val ;;
+            --stale-days) need_uint "$opt" "$val"; STALE_DAYS=$val; SET_STALE=1 ;;
             --exclude) EXCLUDE+=("$val"); SET_EXCLUDE=1 ;;
             --config) CONFIG=$val ;;
             --no-git-check) NO_GIT_CHECK=1 ;;
@@ -499,6 +609,9 @@ EOF
     if [ "$SET_OLDER" = 0 ] && v=$(os_config_scalar "$CONFIG" olderThanDays); then
         case $v in ''|*[!0-9]*) warn "Ignoring olderThanDays '$v' in $CONFIG" ;; *) OLDER_THAN_DAYS=$v ;; esac
     fi
+    if [ "$SET_STALE" = 0 ] && v=$(os_config_scalar "$CONFIG" staleDays); then
+        case $v in ''|*[!0-9]*) warn "Ignoring staleDays '$v' in $CONFIG" ;; *) STALE_DAYS=$v ;; esac
+    fi
     if [ "$SET_EXCLUDE" = 0 ]; then
         while IFS= read -r v; do [ -n "$v" ] && EXCLUDE+=("$v"); done <<EOF
 $(os_config_list "$CONFIG" exclude)
@@ -516,7 +629,7 @@ bb_main() {
     # No roots given or configured: an explicit --mode artifacts scans the current folder;
     # the default all mode does not, so running it from your home folder never scans everything.
     if [ "${#ROOTS[@]}" -eq 0 ]; then
-        if [ "$MODE" = artifacts ]; then ROOTS=("$(pwd -P)")
+        if [ "$MODE" = artifacts ] || [ "$MODE" = worktrees ]; then ROOTS=("$(pwd -P)")
         else roots_note='Artifacts skipped: no --roots given and none in the config file.'; fi
     fi
 
@@ -533,8 +646,14 @@ bb_main() {
         os_register_caches
         invoke_caches
     fi
-    if [ "$MODE" = all ] || [ "$MODE" = artifacts ]; then
-        if [ -n "$roots_note" ]; then note "$roots_note"; else invoke_artifacts; fi
+    if [ "$MODE" != caches ]; then
+        if [ -n "$roots_note" ]; then
+            note "$roots_note"
+        else
+            prepare_roots
+            [ "$MODE" = worktrees ] || invoke_artifacts
+            invoke_worktrees
+        fi
     fi
 
     print_report

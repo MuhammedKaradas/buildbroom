@@ -157,6 +157,31 @@ out=$(dbb); rc=$?
 check 'a failing docker system df is not fatal' [ "$rc" = 0 ]
 check 'no Docker row when df fails'        not_in 'Docker build cache' "$out"
 
+printf '\n== stale git worktrees are reported, never removed\n'
+w="$F/wt"; mkdir -p "$w"
+g() { local d=$1; shift; git -C "$d" -c user.name=test -c user.email=test@example.com "$@"; }
+git -C "$w" init -q -b main main
+echo a > "$w/main/a.txt"; g "$w/main" add -A; g "$w/main" commit -qm init
+git -C "$w/main" worktree add -q -b merged-feature "$w/merged"            # nothing new: merged into main
+git -C "$w/main" worktree add -q -b old-feature "$w/old"
+echo b > "$w/old/b.txt"; g "$w/old" add -A
+GIT_COMMITTER_DATE='2020-01-01T00:00:00' g "$w/old" commit -qm old --date '2020-01-01T00:00:00'
+echo wip > "$w/old/wip.txt"                                                 # uncommitted work
+git -C "$w/main" worktree add -q -b gone-feature "$w/gone"; rm -rf "$w/gone"  # folder deleted by hand
+git -C "$w/main" worktree add -q -b active "$w/active"
+echo c > "$w/active/c.txt"; g "$w/active" add -A; g "$w/active" commit -qm fresh
+out=$("$bb_bash" "$script" --mode worktrees --roots "$w" --config "$F/none.json" 2>&1)
+check 'merged worktree reported'           grep -qE "merged into main +$w/merged" <<<"$out"
+check 'old worktree reported with its age' grep -qE "last commit [0-9]+ d ago; HAS UNCOMMITTED CHANGES +$w/old" <<<"$out"
+check 'gone worktree reported'             grep -qE "folder is gone \\(git worktree prune\\) +$w/gone" <<<"$out"
+check 'active worktree not reported'       not_in "$w/active" "$out"
+check 'main worktree not reported'         not_in "  $w/main" "$out"
+check 'removal hint shown'                 grep -qF 'git worktree remove <path>' <<<"$out"
+"$bb_bash" "$script" --mode all --roots "$w" --config "$F/none.json" --apply --older-than-days 0 >/dev/null 2>&1
+check 'apply does not remove a worktree'   there "$w/merged/a.txt"
+check 'apply keeps uncommitted work'       there "$w/old/wip.txt"
+check 'apply does not prune git metadata'  grep -q 'prunable' <<<"$(git -C "$w/main" worktree list --porcelain)"
+
 printf '\n== unknown options are rejected\n'
 # shellcheck disable=SC2329
 rejects() { ! "$bb_bash" "$script" "$@" >/dev/null 2>&1; }

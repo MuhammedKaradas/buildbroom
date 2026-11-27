@@ -99,6 +99,19 @@ klasör erişim izni sormasına yol açar.
 | `.dart_tool` | `pubspec.yaml` |
 | `__pycache__`, `.pytest_cache`, `.mypy_cache` | Python dosyaları |
 
+### Eski git worktree'leri (sadece rapor, şimdilik macOS)
+
+`--mode artifacts`, `all` (kök verildiyse) veya `worktrees` ile buildbroom, köklerin altındaki terk edilmiş
+görünen bağlı git worktree'lerini de listeler:
+
+- **folder is gone**: worktree klasörü elle silinmiş. Git'teki kaydını `git worktree prune` temizler
+- **merged into main** (ya da `origin/HEAD`): branch'inde varsayılan branch'te olmayan hiçbir şey yok
+- **last commit N d ago**: son commit `--stale-days` günden (varsayılan 30) eski
+
+Her satır worktree'nin ne kadar yer kapladığını gösterir, **commit'lenmemiş değişiklik varsa** uyarır.
+Worktree'ler asla silinmez: silmek için `git worktree remove <yol>` kullan, commit'lenmemiş iş varsa reddeder.
+Kullanımdaki worktree'ler listelenmez.
+
 ## Güvenlik modeli
 
 1. **Varsayılan kuru çalıştırma.** `-Apply` verilmezse buildbroom sadece rapor basar.
@@ -132,11 +145,12 @@ klasör erişim izni sormasına yol açar.
 
 | Windows | macOS | Varsayılan | Anlamı |
 |---|---|---|---|
-| `-Mode` | `--mode` | `all` | `all`, `caches` veya `artifacts` |
+| `-Mode` | `--mode` | `all` | `all`, `caches` veya `artifacts`. macOS'ta ayrıca `worktrees` (sadece rapor) |
 | `-Roots` | `--roots` | config, yoksa yok | kalıntı aranacak bir veya daha fazla klasör (virgülle ayrılmış ya da tekrarlanmış) |
 | `-OlderThanDays` | `--older-than-days` | `7` | bundan daha yakın zamanda kullanılmış kalıntıları koru |
 | `-TempDays` | | `3` | bundan yeni Temp öğelerini koru (macOS temp klasörünü kendisi temizler) |
 | `-MaxDepth` | `--max-depth` | `8` | her kökün altında ne kadar derine inileceği |
+| | `--stale-days` | `30` | son commit'i bundan eski worktree'leri raporla (config'te `staleDays`) |
 | `-Exclude` | `--exclude` | | atlanacak yollar (joker karakterli), ör. `*\keep-me\*` / `*/keep-me/*` |
 | `-NoGitCheck` | `--no-git-check` | kapalı | git reposu olmayan klasörlerdeki kalıntıları da temizle |
 | `-Deep` | `--deep` | kapalı | yeniden indirmesi uzun süren büyük önbellekleri de sil (bkz. yukarısı) |

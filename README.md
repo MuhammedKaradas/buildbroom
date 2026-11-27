@@ -98,6 +98,19 @@ makes macOS ask for folder access.
 | `.dart_tool` | `pubspec.yaml` |
 | `__pycache__`, `.pytest_cache`, `.mypy_cache` | Python files |
 
+### Stale git worktrees (report only, macOS for now)
+
+With `--mode artifacts`, `all` (when roots are set) or `worktrees`, buildbroom also lists linked git worktrees
+under your roots that look abandoned:
+
+- **folder is gone**: the worktree was deleted by hand; `git worktree prune` cleans up git's record of it
+- **merged into main** (or `origin/HEAD`): its branch has nothing that is not already in the default branch
+- **last commit N d ago**: older than `--stale-days` (default 30)
+
+Each row shows how much space the worktree takes and warns when it **has uncommitted changes**. Worktrees are
+never removed: remove one yourself with `git worktree remove <path>`, which refuses when there is uncommitted work.
+Active worktrees are not listed.
+
 ## Safety model
 
 1. **Dry run by default.** Without `-Apply`, buildbroom only prints a report.
@@ -131,11 +144,12 @@ makes macOS ask for folder access.
 
 | Windows | macOS | Default | Meaning |
 |---|---|---|---|
-| `-Mode` | `--mode` | `all` | `all`, `caches` or `artifacts` |
+| `-Mode` | `--mode` | `all` | `all`, `caches` or `artifacts`; macOS also has `worktrees` (report only) |
 | `-Roots` | `--roots` | from config, else none | one or more folders to scan for artifacts (comma-separated or repeated) |
 | `-OlderThanDays` | `--older-than-days` | `7` | keep artifacts changed more recently than this |
 | `-TempDays` | | `3` | keep Temp entries newer than this (macOS cleans its temp folder itself) |
 | `-MaxDepth` | `--max-depth` | `8` | how deep to scan under each root |
+| | `--stale-days` | `30` | report worktrees whose last commit is older than this (`staleDays` in the config) |
 | `-Exclude` | `--exclude` | | wildcard paths to skip, e.g. `*\keep-me\*` / `*/keep-me/*` |
 | `-NoGitCheck` | `--no-git-check` | off | also clean artifacts in folders that are not git repos |
 | `-Deep` | `--deep` | off | also clear big caches that take long to download again (see above) |

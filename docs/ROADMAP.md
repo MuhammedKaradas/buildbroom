@@ -27,5 +27,6 @@ Options, to be decided:
 ## Ideas
 - Interactive mode: pick which items to delete from the report
 - Detect stale git worktrees (`git worktree list` + prunable) and suggest `git worktree remove`
+  (macOS done, #5; Windows still to do)
 - Docker: report reclaimable space per image/volume and compact the WSL vhdx (needs admin)
 - "Watch" report: show what grew since the last run
